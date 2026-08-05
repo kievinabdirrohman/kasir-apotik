@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Kasir Apotek",
+  "description": "Sistem Kasir & Manajemen Stok Apotek dengan Komisi Dokter dan Laporan Operasional",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
