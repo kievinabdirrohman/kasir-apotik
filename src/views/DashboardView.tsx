@@ -1015,7 +1015,7 @@ export const DashboardView: React.FC = () => {
                 <ArrowUpRight className="w-4 h-4" />
               </div>
               <div className="text-left">
-                <span className="block text-slate-900 font-bold">Cetak Laporan Penjualan</span>
+                <span className="block text-slate-900 font-bold">Lihat Laporan Penjualan</span>
                 <span className="text-[11px] text-slate-500">Harian & bulanan</span>
               </div>
             </div>

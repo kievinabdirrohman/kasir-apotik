@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { ActiveTab } from '../types';
+import logoImg from '../assets/logo.png';
 import {
   LayoutDashboard,
   Pill,
@@ -16,6 +17,8 @@ import {
   AlertTriangle,
   Receipt,
   WalletCards,
+  Package,
+  Calculator,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -78,6 +81,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       ],
     },
     {
+      label: 'Laporan Perpajakan',
+      items: [
+        { id: 'report-pajak-ppn', label: 'Rekap Pajak PPN & Non-PPN', icon: Calculator },
+        { id: 'report-obat', label: 'Laporan Produk Obat', icon: Pill },
+        { id: 'report-non-obat', label: 'Laporan Non-Obat', icon: Package },
+      ],
+    },
+    {
       label: 'Sistem',
       items: [
         { id: 'users', label: 'Pengguna', icon: UserCog, adminOnly: true },
@@ -103,19 +114,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-40 w-64 bg-slate-900 text-slate-200 flex flex-col border-r border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static ${
+        className={`fixed top-0 bottom-0 left-0 z-40 w-64 bg-slate-900 text-slate-200 flex flex-col border-r border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 lg:sticky lg:top-0 lg:h-screen lg:shrink-0 ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         {/* Sidebar Header */}
         <div className="p-4 flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500 text-slate-950 flex items-center justify-center font-black">
-              AP
-            </div>
+            <img
+              src={logoImg}
+              alt="Apotek Logo"
+              referrerPolicy="no-referrer"
+              className="w-8 h-8 object-cover rounded-[8px]"
+            />
             <div>
-              <span className="font-bold text-white text-sm block leading-tight">APOTEK KASIR</span>
-              <span className="text-[10px] text-emerald-400 font-mono">v2.5 Pro POS</span>
+              <span className="font-bold text-white text-[12px] block leading-tight">APOTEK AZ ZAINIYAH</span>
             </div>
           </div>
           <button
@@ -125,21 +138,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
             <X className="w-5 h-5" />
           </button>
         </div>
-
-        {/* User Role Card */}
-        {currentUser && (
-          <div className="p-3 mx-3 my-3 rounded-xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-between">
-            <div className="min-w-0">
-              <div className="text-xs font-bold text-white truncate">{currentUser.name}</div>
-              <div className="text-[10px] text-slate-400">
-                Akses:{' '}
-                <span className="font-extrabold text-emerald-400">
-                  {currentUser.isSuperAdmin ? 'Admin Utama' : currentUser.role.toUpperCase()}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Navigation Menu */}
         <nav className="flex-1 px-3 overflow-y-auto py-2">

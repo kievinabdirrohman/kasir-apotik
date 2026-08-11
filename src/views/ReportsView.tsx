@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { formatRupiah, formatDate, formatDateTime, getDaysUntilExpired, getExpiredStatus, getWIBDateString, isPpnTransaction, formatStockDisplay } from '../utils/formatters';
+import { formatRupiah, formatDate, formatDateTime, getDaysUntilExpired, getExpiredStatus, getWIBDateString, isPpnTransaction, getItemIsPpn, formatStockDisplay } from '../utils/formatters';
 import {
   FileSpreadsheet,
   Printer,
-  Download,
   Calendar,
   Users,
   Stethoscope,
@@ -24,9 +23,47 @@ import {
   UserCheck,
   CreditCard,
   ChevronRight,
+  Package,
+  Download,
 } from 'lucide-react';
 
-export const ReportsView: React.FC = () => {
+const PaginationControls = ({ currentPage, totalPages, onPageChange, totalItems, itemsPerPage }: { currentPage: number, totalPages: number, onPageChange: (p: number) => void, totalItems: number, itemsPerPage: number }) => {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-4 py-3 bg-white border-t border-slate-100 rounded-b-xl text-xs">
+      <span className="text-slate-500 font-medium">
+        Menampilkan {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, totalItems)} dari {totalItems} entri
+      </span>
+      <div className="flex items-center gap-1.5">
+        <button 
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          disabled={currentPage === 1}
+          className="px-3 py-1.5 font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors border border-slate-200/60 shadow-2xs"
+        >
+          Sebelumnya
+        </button>
+        <span className="px-2 py-1 font-bold text-slate-700 bg-slate-100/80 rounded-lg border border-slate-200 text-[11px]">
+          {currentPage} / {totalPages}
+        </span>
+        <button 
+          onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+          disabled={currentPage === totalPages}
+          className="px-3 py-1.5 font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors border border-slate-200/60 shadow-2xs"
+        >
+          Selanjutnya
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export type ReportTabType = 'penjualan' | 'customer' | 'dokter' | 'stok' | 'expired' | 'pajak_ppn' | 'produk_obat' | 'produk_non_obat';
+
+interface ReportsViewProps {
+  initialTab?: ReportTabType;
+}
+
+export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjualan' }) => {
   const {
     transactions,
     customers,
@@ -40,7 +77,14 @@ export const ReportsView: React.FC = () => {
 
   const todayStr = getWIBDateString();
 
-  const [activeReportTab, setActiveReportTab] = useState<'penjualan' | 'customer' | 'dokter' | 'stok' | 'expired' | 'pajak_ppn'>('penjualan');
+  const [activeReportTab, setActiveReportTab] = useState<ReportTabType>(initialTab);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveReportTab(initialTab);
+    }
+  }, [initialTab]);
+
   const [taxReportFilter, setTaxReportFilter] = useState<'all' | 'PPN' | 'NON_PPN'>('all');
 
   // Penjualan Filter Date & Controls (Default: Hari ini / 1_day)
@@ -70,10 +114,82 @@ export const ReportsView: React.FC = () => {
   const [selectedMedicineDetail, setSelectedMedicineDetail] = useState<any | null>(null);
   const [selectedExpiredDetail, setSelectedExpiredDetail] = useState<any | null>(null);
 
+  // Pagination States
+  const [penjualanPage, setPenjualanPage] = useState(1);
+  const [customerPage, setCustomerPage] = useState(1);
+  const [dokterPage, setDokterPage] = useState(1);
+  const [stokPage, setStokPage] = useState(1);
+  const [expiredPage, setExpiredPage] = useState(1);
+  const [pajakPpnPage, setPajakPpnPage] = useState(1);
+  const [reportObatPage, setReportObatPage] = useState(1);
+  const [reportNonObatPage, setReportNonObatPage] = useState(1);
+  const ITEMS_PER_PAGE = 20;
+
+  // Pagination for Detail Modals
+  const [modalCustomerPage, setModalCustomerPage] = useState(1);
+  const [modalDoctorPage, setModalDoctorPage] = useState(1);
+  const [modalMedicineTrxPage, setModalMedicineTrxPage] = useState(1);
+  const [modalMedicineHistoryPage, setModalMedicineHistoryPage] = useState(1);
+  const [modalTrxItemsPage, setModalTrxItemsPage] = useState(1);
+  const MODAL_ITEMS_PER_PAGE = 10;
+
+  useEffect(() => {
+    setModalCustomerPage(1);
+  }, [selectedCustomerDetail]);
+
+  useEffect(() => {
+    setModalDoctorPage(1);
+  }, [selectedDoctorDetail]);
+
+  useEffect(() => {
+    setModalMedicineTrxPage(1);
+    setModalMedicineHistoryPage(1);
+  }, [selectedMedicineDetail]);
+
+  useEffect(() => {
+    setModalTrxItemsPage(1);
+  }, [selectedTrxDetail]);
+
+  useEffect(() => {
+    setPenjualanPage(1);
+  }, [searchPenjualan, startDate, endDate, methodFilter, prescriptionFilter, cashierFilter, doctorFilter, customerFilter, salesSubView]);
+
+  useEffect(() => {
+    setCustomerPage(1);
+  }, [searchCustomer, startDate, endDate]);
+
+  useEffect(() => {
+    setDokterPage(1);
+  }, [searchDokter, startDate, endDate]);
+
+  useEffect(() => {
+    setStokPage(1);
+  }, [searchStok, categoryFilter]);
+
+  useEffect(() => {
+    setExpiredPage(1);
+  }, [searchExpired, categoryFilter]);
+
+  useEffect(() => {
+    setPajakPpnPage(1);
+  }, [taxReportFilter, startDate, endDate, searchPenjualan]);
+
+  useEffect(() => {
+    setReportObatPage(1);
+  }, [startDate, endDate, taxReportFilter, categoryFilter, searchPenjualan]);
+
+  useEffect(() => {
+    setReportNonObatPage(1);
+  }, [startDate, endDate, taxReportFilter, categoryFilter, searchPenjualan]);
+
   // Preset Date Selection Handler for Reports
   const handleSalesPresetChange = (preset: string) => {
     setSalesPreset(preset);
-    if (preset === 'custom') return;
+    if (preset === 'custom') {
+      if (!startDate) setStartDate(todayStr);
+      if (!endDate) setEndDate(todayStr);
+      return;
+    }
 
     const parts = todayStr.split('-').map(Number);
     const now = new Date(parts[0], parts[1] - 1, parts[2]);
@@ -110,6 +226,22 @@ export const ReportsView: React.FC = () => {
     }
   };
 
+  const handleStartDateChange = (val: string) => {
+    setStartDate(val);
+    setSalesPreset('custom');
+    if (endDate && val > endDate) {
+      setEndDate(val);
+    }
+  };
+
+  const handleEndDateChange = (val: string) => {
+    setEndDate(val);
+    setSalesPreset('custom');
+    if (startDate && val < startDate) {
+      setStartDate(val);
+    }
+  };
+
   const handleResetFilters = () => {
     setSalesPreset('1_day');
     setStartDate(todayStr);
@@ -124,22 +256,7 @@ export const ReportsView: React.FC = () => {
     setSearchPenjualan('');
   };
 
-  // Handle Export CSV
-  const handleExportCSV = (filename: string, rows: string[][]) => {
-    const csvContent =
-      'data:text/csv;charset=utf-8,' + rows.map(e => e.map(item => `"${item}"`).join(',')).join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `${filename}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
 
-  const handlePrintReport = () => {
-    window.print();
-  };
 
   // Options for Dropdowns
   const cashierOptions = Array.from(new Set(transactions.map(t => t.cashierName).filter(Boolean)));
@@ -149,7 +266,7 @@ export const ReportsView: React.FC = () => {
   // Filter Sales Transactions based on period, advance filters, and search query
   const filteredSalesTransactions = transactions.filter(t => {
     if (t.status !== 'Selesai') return false;
-    const tDate = t.date.split(' ')[0] || t.date.split('T')[0];
+    const tDate = t.date ? t.date.slice(0, 10) : '';
 
     // Date Range Check
     if (startDate && tDate < startDate) return false;
@@ -412,100 +529,143 @@ export const ReportsView: React.FC = () => {
     );
   });
 
+  const paginatedSalesTransactions = filteredSalesTransactions.slice((penjualanPage - 1) * ITEMS_PER_PAGE, penjualanPage * ITEMS_PER_PAGE);
+  const paginatedProductSalesList = filteredProductSalesList.slice((penjualanPage - 1) * ITEMS_PER_PAGE, penjualanPage * ITEMS_PER_PAGE);
+  const paginatedReportCustomers = filteredReportCustomers.slice((customerPage - 1) * ITEMS_PER_PAGE, customerPage * ITEMS_PER_PAGE);
+  const paginatedReportDoctors = filteredReportDoctors.slice((dokterPage - 1) * ITEMS_PER_PAGE, dokterPage * ITEMS_PER_PAGE);
+  const paginatedReportMedicines = filteredReportMedicines.slice((stokPage - 1) * ITEMS_PER_PAGE, stokPage * ITEMS_PER_PAGE);
+  const paginatedExpiredItemsList = allExpiredItemsList.slice((expiredPage - 1) * ITEMS_PER_PAGE, expiredPage * ITEMS_PER_PAGE);
+
+  const isTaxMode = ['pajak_ppn', 'produk_obat', 'produk_non_obat'].includes(activeReportTab);
+
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Laporan Operasional Apotek</h2>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
+            {isTaxMode ? 'Laporan Perpajakan Apotek' : 'Laporan Operasional Apotek'}
+          </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Rekapitulasi penjualan, analisis pelanggan, rujukan dokter, status stok, dan audit kadaluwarsa.
+            {isTaxMode
+              ? 'Rekapitulasi Faktur Penjualan PPN 11% & Nota Non-PPN, Dasar Pengenaan Pajak (DPP), dan rincian PPN per item.'
+              : 'Rekapitulasi penjualan, analisis pelanggan, rujukan dokter, status stok, dan audit kadaluwarsa.'}
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handlePrintReport}
-            className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs px-4 py-2.5 rounded-xl transition-colors flex items-center gap-2"
-          >
-            <Printer className="w-4 h-4 text-slate-600" />
-            Cetak Laporan
-          </button>
         </div>
       </div>
 
       {/* Main Report Category Tabs */}
-      <div className="flex border-b border-slate-200 gap-2 sm:gap-6 text-xs font-bold overflow-x-auto scrollbar-none">
-        <button
-          onClick={() => setActiveReportTab('penjualan')}
-          className={`pb-3 flex items-center gap-2 border-b-2 shrink-0 transition-colors ${
-            activeReportTab === 'penjualan'
-              ? 'border-emerald-600 text-emerald-700'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <TrendingUp className="w-4 h-4" />
-          1. Laporan Penjualan
-        </button>
+      <div className="flex border-b border-slate-200 gap-2 sm:gap-5 text-xs font-bold overflow-x-auto scrollbar-none">
+        {isTaxMode ? (
+          <>
+            <button
+              onClick={() => {
+                setActiveReportTab('pajak_ppn');
+                setActiveTab('report-pajak-ppn');
+              }}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors font-bold ${
+                activeReportTab === 'pajak_ppn'
+                  ? 'border-blue-600 text-blue-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Calculator className="w-4 h-4 text-blue-600" />
+              1. Rekap Pajak PPN & Non-PPN
+            </button>
 
-        <button
-          onClick={() => setActiveReportTab('customer')}
-          className={`pb-3 flex items-center gap-2 border-b-2 shrink-0 transition-colors ${
-            activeReportTab === 'customer'
-              ? 'border-emerald-600 text-emerald-700'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <Users className="w-4 h-4" />
-          2. Laporan Customer
-        </button>
+            <button
+              onClick={() => {
+                setActiveReportTab('produk_obat');
+                setActiveTab('report-obat');
+              }}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors ${
+                activeReportTab === 'produk_obat'
+                  ? 'border-emerald-600 text-emerald-700 font-bold'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Pill className="w-4 h-4 text-emerald-600" />
+              2. Laporan Produk Obat
+            </button>
 
-        <button
-          onClick={() => setActiveReportTab('dokter')}
-          className={`pb-3 flex items-center gap-2 border-b-2 shrink-0 transition-colors ${
-            activeReportTab === 'dokter'
-              ? 'border-emerald-600 text-emerald-700'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <Stethoscope className="w-4 h-4" />
-          3. Laporan Dokter
-        </button>
+            <button
+              onClick={() => {
+                setActiveReportTab('produk_non_obat');
+                setActiveTab('report-non-obat');
+              }}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors ${
+                activeReportTab === 'produk_non_obat'
+                  ? 'border-indigo-600 text-indigo-700 font-bold'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Package className="w-4 h-4 text-indigo-600" />
+              3. Laporan Non-Obat
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => setActiveReportTab('penjualan')}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors ${
+                activeReportTab === 'penjualan'
+                  ? 'border-emerald-600 text-emerald-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <TrendingUp className="w-4 h-4" />
+              1. Laporan Penjualan
+            </button>
 
-        <button
-          onClick={() => setActiveReportTab('stok')}
-          className={`pb-3 flex items-center gap-2 border-b-2 shrink-0 transition-colors ${
-            activeReportTab === 'stok'
-              ? 'border-emerald-600 text-emerald-700'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <Pill className="w-4 h-4" />
-          4. Laporan Stok
-        </button>
+            <button
+              onClick={() => setActiveReportTab('customer')}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors ${
+                activeReportTab === 'customer'
+                  ? 'border-emerald-600 text-emerald-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              2. Laporan Customer
+            </button>
 
-        <button
-          onClick={() => setActiveReportTab('expired')}
-          className={`pb-3 flex items-center gap-2 border-b-2 shrink-0 transition-colors ${
-            activeReportTab === 'expired'
-              ? 'border-emerald-600 text-emerald-700'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <Clock className="w-4 h-4" />
-          5. Laporan Expired
-        </button>
+            <button
+              onClick={() => setActiveReportTab('dokter')}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors ${
+                activeReportTab === 'dokter'
+                  ? 'border-emerald-600 text-emerald-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Stethoscope className="w-4 h-4" />
+              3. Laporan Dokter
+            </button>
 
-        <button
-          onClick={() => setActiveReportTab('pajak_ppn')}
-          className={`pb-3 flex items-center gap-2 border-b-2 shrink-0 transition-colors font-bold ${
-            activeReportTab === 'pajak_ppn'
-              ? 'border-blue-600 text-blue-700'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <Calculator className="w-4 h-4 text-blue-600" />
-          6. Laporan Pajak PPN & Non-PPN
-        </button>
+            <button
+              onClick={() => setActiveReportTab('stok')}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors ${
+                activeReportTab === 'stok'
+                  ? 'border-emerald-600 text-emerald-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              4. Laporan Stok
+            </button>
+
+            <button
+              onClick={() => setActiveReportTab('expired')}
+              className={`pb-3 flex items-center gap-1.5 border-b-2 shrink-0 transition-colors ${
+                activeReportTab === 'expired'
+                  ? 'border-emerald-600 text-emerald-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Clock className="w-4 h-4" />
+              5. Laporan Expired
+            </button>
+          </>
+        )}
       </div>
 
       {/* REPORT CONTENT 1: PENJUALAN */}
@@ -578,33 +738,29 @@ export const ReportsView: React.FC = () => {
               </div>
 
               {/* Date Input Pickers */}
-              <div className="flex items-center gap-2 shrink-0">
-                <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-400 font-bold">Dari:</span>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={e => {
-                      setStartDate(e.target.value);
-                      setSalesPreset('custom');
-                    }}
-                    className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
-                  />
+              {salesPreset === 'custom' && (
+                <div className="flex items-center gap-2 shrink-0 transition-all duration-300">
+                  <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
+                    <span className="text-[10px] text-slate-400 font-bold">Dari:</span>
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={e => handleStartDateChange(e.target.value)}
+                      className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
+                    />
+                  </div>
+                  <span className="text-slate-400 font-bold text-xs">s/d</span>
+                  <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
+                    <span className="text-[10px] text-slate-400 font-bold">Sampai:</span>
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={e => handleEndDateChange(e.target.value)}
+                      className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
+                    />
+                  </div>
                 </div>
-                <span className="text-slate-400 font-bold text-xs">s/d</span>
-                <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-400 font-bold">Sampai:</span>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={e => {
-                      setEndDate(e.target.value);
-                      setSalesPreset('custom');
-                    }}
-                    className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
-                  />
-                </div>
-              </div>
+              )}
             </div>
 
             {/* ROW 2: Filter Toolbar & Actions */}
@@ -687,52 +843,6 @@ export const ReportsView: React.FC = () => {
                 )}
               </div>
 
-              {/* CSV Export Button */}
-              <button
-                onClick={() => {
-                  if (salesSubView === 'trx') {
-                    const rows = [
-                      ['No Transaksi', 'Tanggal', 'Customer', 'Dokter', 'Kasir', 'Metode', 'Status Resep', 'Jenis Pajak', 'DPP (Rp)', 'PPN 11% (Rp)', 'Total Omset (Rp)'],
-                      ...filteredSalesTransactions.map(t => {
-                        const isPpn = isPpnTransaction(t);
-                        const rate = t.ppnRate || 11;
-                        const dpp = isPpn ? (t.dppAmount ?? Math.round(t.totalAmount / (1 + rate / 100))) : t.totalAmount;
-                        const ppn = isPpn ? (t.ppnAmount ?? (t.totalAmount - dpp)) : 0;
-                        return [
-                          t.trxNo,
-                          t.date,
-                          t.customerName || 'Umum',
-                          t.doctorName || '-',
-                          t.cashierName,
-                          t.paymentMethod,
-                          t.isPrescription ? 'Resep Dokter' : 'Non-Resep',
-                          isPpn ? 'FAKTUR PPN 11%' : 'NOTA NON-PPN',
-                          dpp.toString(),
-                          ppn.toString(),
-                          t.totalAmount.toString(),
-                        ];
-                      }),
-                    ];
-                    handleExportCSV(`Laporan_Penjualan_${salesPreset}`, rows);
-                  } else {
-                    const rows = [
-                      ['Kode Obat', 'Nama Obat', 'Kemasan Unit', 'Total Qty Terjual', 'Frekuensi Transaksi', 'Total Omset (Rp)'],
-                      ...filteredProductSalesList.map(p => [
-                        p.code,
-                        p.name,
-                        p.unit,
-                        p.totalQty.toString(),
-                        p.transactionCount.toString(),
-                        p.totalRevenue.toString(),
-                      ]),
-                    ];
-                    handleExportCSV(`Laporan_Penjualan_Item_${salesPreset}`, rows);
-                  }
-                }}
-                className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors shrink-0 text-xs"
-              >
-                <Download className="w-3.5 h-3.5" /> Export Excel/CSV
-              </button>
             </div>
 
             {/* EXPANDABLE ADVANCE FILTERS PANEL FOR REPORTS */}
@@ -937,12 +1047,12 @@ export const ReportsView: React.FC = () => {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
               {/* Mobile & Tablet Card List */}
               <div className="lg:hidden p-3 space-y-2.5 bg-slate-50/50">
-                {filteredSalesTransactions.length === 0 ? (
+                {paginatedSalesTransactions.length === 0 ? (
                   <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
                     Tidak ada data transaksi penjualan pada periode ini.
                   </div>
                 ) : (
-                  filteredSalesTransactions.map(t => {
+                  paginatedSalesTransactions.map(t => {
                     const isPpn = isPpnTransaction(t);
                     return (
                       <div key={t.id} className="p-3 bg-white rounded-xl border border-slate-200/80 shadow-2xs space-y-2 text-xs">
@@ -1012,14 +1122,14 @@ export const ReportsView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredSalesTransactions.length === 0 ? (
+                    {paginatedSalesTransactions.length === 0 ? (
                       <tr>
                         <td colSpan={9} className="py-8 text-center text-slate-400">
                           Tidak ada data transaksi penjualan pada periode ini.
                         </td>
                       </tr>
                     ) : (
-                      filteredSalesTransactions.map(t => {
+                      paginatedSalesTransactions.map(t => {
                         const isPpn = isPpnTransaction(t);
                         return (
                           <tr key={t.id} className="hover:bg-slate-50">
@@ -1087,6 +1197,13 @@ export const ReportsView: React.FC = () => {
                   )}
                 </table>
               </div>
+              <PaginationControls
+                currentPage={penjualanPage}
+                totalPages={Math.ceil(filteredSalesTransactions.length / ITEMS_PER_PAGE)}
+                onPageChange={setPenjualanPage}
+                totalItems={filteredSalesTransactions.length}
+                itemsPerPage={ITEMS_PER_PAGE}
+              />
             </div>
           )}
 
@@ -1095,12 +1212,12 @@ export const ReportsView: React.FC = () => {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
               {/* Mobile & Tablet Card List */}
               <div className="lg:hidden p-3 space-y-2.5 bg-slate-50/50">
-                {filteredProductSalesList.length === 0 ? (
+                {paginatedProductSalesList.length === 0 ? (
                   <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
                     Tidak ada item obat yang sesuai dengan pencarian / periode ini.
                   </div>
                 ) : (
-                  filteredProductSalesList.map((p, idx) => {
+                  paginatedProductSalesList.map((p, idx) => {
                     const share = totalSalesAmount > 0 ? ((p.totalRevenue / totalSalesAmount) * 100).toFixed(1) : '0';
                     return (
                       <div key={idx} className="p-3 bg-white rounded-xl border border-slate-200/80 shadow-2xs space-y-2 text-xs">
@@ -1157,14 +1274,14 @@ export const ReportsView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredProductSalesList.length === 0 ? (
+                    {paginatedProductSalesList.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="py-8 text-center text-slate-400">
                           Tidak ada item obat yang sesuai dengan pencarian / periode ini.
                         </td>
                       </tr>
                     ) : (
-                      filteredProductSalesList.map((p, idx) => {
+                      paginatedProductSalesList.map((p, idx) => {
                         const share = totalSalesAmount > 0 ? ((p.totalRevenue / totalSalesAmount) * 100).toFixed(1) : '0';
                         return (
                           <tr key={idx} className="hover:bg-slate-50">
@@ -1203,6 +1320,13 @@ export const ReportsView: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={penjualanPage}
+                totalPages={Math.ceil(filteredProductSalesList.length / ITEMS_PER_PAGE)}
+                onPageChange={setPenjualanPage}
+                totalItems={filteredProductSalesList.length}
+                itemsPerPage={ITEMS_PER_PAGE}
+              />
             </div>
           )}
         </div>
@@ -1268,23 +1392,6 @@ export const ReportsView: React.FC = () => {
                   Reset Cari
                 </button>
               )}
-              <button
-                onClick={() => {
-                  const rows = [
-                    ['No Member', 'Nama Customer', 'No HP', 'Total Transaksi', 'Total Pembelian (Rp)'],
-                    ...filteredReportCustomers.map(c => {
-                      const custTrxs = getCustomerTransactions(c);
-                      const realSpent = custTrxs.reduce((s, t) => s + t.totalAmount, 0);
-                      const realTrxCount = custTrxs.length;
-                      return [c.memberNo, c.name, c.phone, realTrxCount.toString(), realSpent.toString()];
-                    }),
-                  ];
-                  handleExportCSV('Laporan_Customer_Member', rows);
-                }}
-                className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center gap-1.5 shrink-0 transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" /> Export Excel/CSV
-              </button>
             </div>
           </div>
 
@@ -1292,12 +1399,12 @@ export const ReportsView: React.FC = () => {
           <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
             {/* Mobile & Tablet Card List */}
             <div className="lg:hidden p-3 space-y-2.5 bg-slate-50/50">
-              {filteredReportCustomers.length === 0 ? (
+              {paginatedReportCustomers.length === 0 ? (
                 <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
                   Tidak ada data customer yang sesuai dengan filter / pencarian.
                 </div>
               ) : (
-                filteredReportCustomers.map(cust => {
+                paginatedReportCustomers.map(cust => {
                   const custTrxs = getCustomerTransactions(cust);
                   const realSpent = custTrxs.reduce((s, t) => s + t.totalAmount, 0);
                   const realTrxCount = custTrxs.length;
@@ -1348,14 +1455,14 @@ export const ReportsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredReportCustomers.length === 0 ? (
+                  {paginatedReportCustomers.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-8 text-center text-slate-400">
                         Tidak ada data customer yang sesuai dengan filter / pencarian.
                       </td>
                     </tr>
                   ) : (
-                    filteredReportCustomers.map(cust => {
+                    paginatedReportCustomers.map(cust => {
                       const custTrxs = getCustomerTransactions(cust);
                       const realSpent = custTrxs.reduce((s, t) => s + t.totalAmount, 0);
                       const realTrxCount = custTrxs.length;
@@ -1391,6 +1498,13 @@ export const ReportsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              currentPage={customerPage}
+              totalPages={Math.ceil(filteredReportCustomers.length / ITEMS_PER_PAGE)}
+              onPageChange={setCustomerPage}
+              totalItems={filteredReportCustomers.length}
+              itemsPerPage={ITEMS_PER_PAGE}
+            />
           </div>
         </div>
       )}
@@ -1420,27 +1534,6 @@ export const ReportsView: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const custTrxs = getCustomerTransactions(selectedCustomerDetail);
-                    const rows = [
-                      ['No Transaksi', 'Tanggal Waktu', 'Kasir', 'Dokter', 'Metode Pembayaran', 'Jumlah Item', 'Total Transaksi (Rp)'],
-                      ...custTrxs.map(t => [
-                        t.trxNo,
-                        formatDateTime(t.date),
-                        t.cashierName,
-                        t.doctorName || '-',
-                        t.paymentMethod,
-                        t.items.reduce((s, i) => s + i.qty, 0).toString(),
-                        t.totalAmount.toString(),
-                      ]),
-                    ];
-                    handleExportCSV(`Detail_Transaksi_${selectedCustomerDetail.memberNo}_${selectedCustomerDetail.name}`, rows);
-                  }}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" /> Export Transaksi
-                </button>
                 <button
                   onClick={() => setSelectedCustomerDetail(null)}
                   className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
@@ -1477,9 +1570,7 @@ export const ReportsView: React.FC = () => {
                     </div>
                   </div>
                 );
-              })()}
-
-              {/* Detail Table of Customer Transactions */}
+              })()}              {/* Detail Table of Customer Transactions */}
               <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs overflow-hidden">
                 <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                   <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
@@ -1490,32 +1581,40 @@ export const ReportsView: React.FC = () => {
                     {getCustomerTransactions(selectedCustomerDetail).length} Transaksi Tercatat
                   </span>
                 </div>
+                {(() => {
+                  const custTrxs = getCustomerTransactions(selectedCustomerDetail);
+                  const paginatedCustTrxs = custTrxs.slice((modalCustomerPage - 1) * MODAL_ITEMS_PER_PAGE, modalCustomerPage * MODAL_ITEMS_PER_PAGE);
+                  
+                  if (custTrxs.length === 0) {
+                    return (
+                      <div className="p-8 text-center space-y-2">
+                        <AlertCircle className="w-8 h-8 text-slate-300 mx-auto" />
+                        <p className="text-slate-500 text-xs font-semibold">
+                          Belum ada rincian transaksi kasir terbaru yang tersimpan untuk customer ini.
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          Total Pembelian: <strong>Rp 0</strong> (0x transaksi).
+                        </p>
+                      </div>
+                    );
+                  }
 
-                {getCustomerTransactions(selectedCustomerDetail).length === 0 ? (
-                  <div className="p-8 text-center space-y-2">
-                    <AlertCircle className="w-8 h-8 text-slate-300 mx-auto" />
-                    <p className="text-slate-500 text-xs font-semibold">
-                      Belum ada rincian transaksi kasir terbaru yang tersimpan untuk customer ini.
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Total Pembelian: <strong>Rp 0</strong> (0x transaksi).
-                    </p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
-                          <th className="py-2.5 px-3">No. Transaksi</th>
-                          <th className="py-2.5 px-3">Tanggal & Waktu</th>
-                          <th className="py-2.5 px-3">Metode & Petugas</th>
-                          <th className="py-2.5 px-3">Rincian Obat / Barang</th>
-                          <th className="py-2.5 px-3 text-right">Total (Rp)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {getCustomerTransactions(selectedCustomerDetail).map(t => (
-                          <tr key={t.id} className="hover:bg-slate-50/80 transition-colors">
+                  return (
+                    <div className="flex flex-col">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                              <th className="py-2.5 px-3">No. Transaksi</th>
+                              <th className="py-2.5 px-3">Tanggal & Waktu</th>
+                              <th className="py-2.5 px-3">Metode & Petugas</th>
+                              <th className="py-2.5 px-3">Rincian Obat / Barang</th>
+                              <th className="py-2.5 px-3 text-right">Total (Rp)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {paginatedCustTrxs.map(t => (
+                              <tr key={t.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="py-3 px-3 align-top font-mono font-bold text-emerald-700">
                               {t.trxNo}
                               {t.isPrescription && (
@@ -1560,7 +1659,16 @@ export const ReportsView: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
-                )}
+                  <PaginationControls
+                    currentPage={modalCustomerPage}
+                    totalPages={Math.ceil(custTrxs.length / MODAL_ITEMS_PER_PAGE)}
+                    onPageChange={setModalCustomerPage}
+                    totalItems={custTrxs.length}
+                    itemsPerPage={MODAL_ITEMS_PER_PAGE}
+                  />
+                  </div>
+                );
+              })()}
               </div>
             </div>
 
@@ -1609,28 +1717,6 @@ export const ReportsView: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const docTrxs = getDoctorTransactions(selectedDoctorDetail);
-                    const rows = [
-                      ['No Transaksi', 'Tanggal Waktu', 'Pasien / Customer', 'Kasir', 'Metode Pembayaran', 'Jumlah Item', 'Total Transaksi (Rp)'],
-                      ...docTrxs.map(t => [
-                        t.trxNo,
-                        formatDateTime(t.date),
-                        t.customerName || (t.customerId ? 'Member' : 'Pelanggan Umum'),
-                        t.cashierName,
-                        t.paymentMethod,
-                        t.items.reduce((s, i) => s + i.qty, 0).toString(),
-                        t.totalAmount.toString(),
-                      ]),
-                    ];
-                    handleExportCSV(`Detail_Transaksi_Dokter_${selectedDoctorDetail.name.replace(/\s+/g, '_')}`, rows);
-                  }}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Export Detail</span>
-                </button>
                 <button
                   onClick={() => setSelectedDoctorDetail(null)}
                   className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
@@ -1684,32 +1770,40 @@ export const ReportsView: React.FC = () => {
                     {getDoctorTransactions(selectedDoctorDetail).length} Transaksi Tercatat
                   </span>
                 </div>
+                {(() => {
+                  const docTrxs = getDoctorTransactions(selectedDoctorDetail);
+                  const paginatedDocTrxs = docTrxs.slice((modalDoctorPage - 1) * MODAL_ITEMS_PER_PAGE, modalDoctorPage * MODAL_ITEMS_PER_PAGE);
 
-                {getDoctorTransactions(selectedDoctorDetail).length === 0 ? (
-                  <div className="p-8 text-center text-slate-400 text-xs space-y-1">
-                    <p className="font-semibold text-slate-600">
-                      Belum ada rincian transaksi kasir terbaru yang tersimpan untuk dokter ini.
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Total Resep Historis: <strong>{selectedDoctorDetail.totalPrescriptions || 0}x resep</strong>.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
-                          <th className="py-3 px-3">No. Transaksi</th>
-                          <th className="py-3 px-3">Tanggal Waktu</th>
-                          <th className="py-3 px-3">Pasien / Customer</th>
-                          <th className="py-3 px-3">Kasir & Pembayaran</th>
-                          <th className="py-3 px-3">Item Obat & Rincian</th>
-                          <th className="py-3 px-3 text-right">Total Transaksi</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {getDoctorTransactions(selectedDoctorDetail).map(t => (
-                          <tr key={t.id} className="hover:bg-slate-50">
+                  if (docTrxs.length === 0) {
+                    return (
+                      <div className="p-8 text-center text-slate-400 text-xs space-y-1">
+                        <p className="font-semibold text-slate-600">
+                          Belum ada rincian transaksi kasir terbaru yang tersimpan untuk dokter ini.
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          Total Resep Historis: <strong>{selectedDoctorDetail.totalPrescriptions || 0}x resep</strong>.
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="flex flex-col">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                              <th className="py-3 px-3">No. Transaksi</th>
+                              <th className="py-3 px-3">Tanggal Waktu</th>
+                              <th className="py-3 px-3">Pasien / Customer</th>
+                              <th className="py-3 px-3">Kasir & Pembayaran</th>
+                              <th className="py-3 px-3">Item Obat & Rincian</th>
+                              <th className="py-3 px-3 text-right">Total Transaksi</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {paginatedDocTrxs.map(t => (
+                              <tr key={t.id} className="hover:bg-slate-50">
                             <td className="py-3 px-3 align-top font-bold text-slate-900 whitespace-nowrap">
                               <div>{t.trxNo}</div>
                               {t.isPrescription && (
@@ -1759,7 +1853,16 @@ export const ReportsView: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
-                )}
+                  <PaginationControls
+                    currentPage={modalDoctorPage}
+                    totalPages={Math.ceil(docTrxs.length / MODAL_ITEMS_PER_PAGE)}
+                    onPageChange={setModalDoctorPage}
+                    totalItems={docTrxs.length}
+                    itemsPerPage={MODAL_ITEMS_PER_PAGE}
+                  />
+                  </div>
+                );
+              })()}
               </div>
             </div>
 
@@ -1837,40 +1940,17 @@ export const ReportsView: React.FC = () => {
                 />
               </div>
             </div>
-            <button
-              onClick={() => {
-                const rows = [
-                  ['Nama Dokter', 'No. HP', 'Status', 'Total Resep Rujukan', 'Total Nilai Resep (Rp)'],
-                  ...filteredReportDoctors.map(d => {
-                    const docTrxs = getDoctorTransactions(d);
-                    const realSpent = docTrxs.reduce((s, t) => s + t.totalAmount, 0);
-                    const realTrxCount = docTrxs.length || d.totalPrescriptions;
-                    return [
-                      d.name,
-                      d.phone || '-',
-                      d.status || 'Aktif',
-                      realTrxCount.toString(),
-                      realSpent.toString(),
-                    ];
-                  }),
-                ];
-                handleExportCSV('Laporan_Dokter_Mitra', rows);
-              }}
-              className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center gap-1.5 shrink-0 transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" /> Export Excel/CSV
-            </button>
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
             {/* Mobile & Tablet Card List */}
             <div className="lg:hidden p-3 space-y-2.5 bg-slate-50/50">
-              {filteredReportDoctors.length === 0 ? (
+              {paginatedReportDoctors.length === 0 ? (
                 <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
                   Tidak ada data dokter yang sesuai dengan pencarian.
                 </div>
               ) : (
-                filteredReportDoctors.map(doc => {
+                paginatedReportDoctors.map(doc => {
                   const docTrxs = getDoctorTransactions(doc);
                   const realSpent = docTrxs.reduce((s, t) => s + t.totalAmount, 0);
                   const realTrxCount = docTrxs.length || doc.totalPrescriptions;
@@ -1929,14 +2009,14 @@ export const ReportsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredReportDoctors.length === 0 ? (
+                  {paginatedReportDoctors.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="py-8 text-center text-slate-400">
                         Tidak ada data dokter yang sesuai dengan pencarian.
                       </td>
                     </tr>
                   ) : (
-                    filteredReportDoctors.map(doc => {
+                    paginatedReportDoctors.map(doc => {
                       const docTrxs = getDoctorTransactions(doc);
                       const realSpent = docTrxs.reduce((s, t) => s + t.totalAmount, 0);
                       const realTrxCount = docTrxs.length || doc.totalPrescriptions;
@@ -1975,6 +2055,13 @@ export const ReportsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              currentPage={dokterPage}
+              totalPages={Math.ceil(filteredReportDoctors.length / ITEMS_PER_PAGE)}
+              onPageChange={setDokterPage}
+              totalItems={filteredReportDoctors.length}
+              itemsPerPage={ITEMS_PER_PAGE}
+            />
           </div>
         </div>
       )}
@@ -1996,37 +2083,17 @@ export const ReportsView: React.FC = () => {
                 />
               </div>
             </div>
-            <button
-              onClick={() => {
-                const rows = [
-                  ['Kode', 'Nama Obat', 'Kategori', 'Stok Saat Ini', 'Batas Min. Stok', 'Harga Jual', 'Lokasi'],
-                  ...filteredReportMedicines.map(m => [
-                    m.code,
-                    m.name,
-                    m.category,
-                    m.stock.toString(),
-                    m.minStock.toString(),
-                    m.price.toString(),
-                    m.location || '-',
-                  ]),
-                ];
-                handleExportCSV('Laporan_Stok_Obat', rows);
-              }}
-              className="px-3.5 py-2 bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 shrink-0"
-            >
-              <Download className="w-3.5 h-3.5" /> Export Excel/CSV
-            </button>
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
             {/* Mobile & Tablet Card List */}
             <div className="lg:hidden p-3 space-y-2.5 bg-slate-50/50">
-              {filteredReportMedicines.length === 0 ? (
+              {paginatedReportMedicines.length === 0 ? (
                 <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
                   Tidak ada data stok obat yang sesuai dengan pencarian.
                 </div>
               ) : (
-                filteredReportMedicines.map(m => {
+                paginatedReportMedicines.map(m => {
                   const isLow = m.stock <= m.minStock;
                   return (
                     <div key={m.id} className="p-3 bg-white rounded-xl border border-slate-200/80 shadow-2xs space-y-2 text-xs">
@@ -2077,14 +2144,14 @@ export const ReportsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredReportMedicines.length === 0 ? (
+                  {paginatedReportMedicines.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="py-8 text-center text-slate-400">
                         Tidak ada data stok obat yang sesuai dengan pencarian.
                       </td>
                     </tr>
                   ) : (
-                    filteredReportMedicines.map(m => {
+                    paginatedReportMedicines.map(m => {
                       const isLow = m.stock <= m.minStock;
                       return (
                         <tr key={m.id} className="hover:bg-slate-50">
@@ -2122,6 +2189,13 @@ export const ReportsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              currentPage={stokPage}
+              totalPages={Math.ceil(filteredReportMedicines.length / ITEMS_PER_PAGE)}
+              onPageChange={setStokPage}
+              totalItems={filteredReportMedicines.length}
+              itemsPerPage={ITEMS_PER_PAGE}
+            />
           </div>
         </div>
       )}
@@ -2143,21 +2217,6 @@ export const ReportsView: React.FC = () => {
                 />
               </div>
             </div>
-            <button
-              onClick={() => {
-                const rows = [
-                  ['Kode', 'Nama Obat', 'Tanggal Expired', 'Sisa Hari', 'Kategori Expired', 'Stok'],
-                  ...allExpiredItemsList.map(m => {
-                    const days = getDaysUntilExpired(m.expiredDate);
-                    return [m.code, m.name, m.expiredDate, days.toString(), getExpiredStatus(m.expiredDate).label, m.stock.toString()];
-                  }),
-                ];
-                handleExportCSV('Laporan_Expired_Obat', rows);
-              }}
-              className="px-3.5 py-2 bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 shrink-0"
-            >
-              <Download className="w-3.5 h-3.5" /> Export Excel/CSV
-            </button>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -2182,12 +2241,12 @@ export const ReportsView: React.FC = () => {
           <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
             {/* Mobile & Tablet Card List */}
             <div className="lg:hidden p-3 space-y-2.5 bg-slate-50/50">
-              {allExpiredItemsList.length === 0 ? (
+              {paginatedExpiredItemsList.length === 0 ? (
                 <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
                   Tidak ada data expired yang sesuai dengan pencarian.
                 </div>
               ) : (
-                allExpiredItemsList.map(m => {
+                paginatedExpiredItemsList.map(m => {
                   const statusInfo = getExpiredStatus(m.expiredDate);
                   return (
                     <div key={m.id} className="p-3 bg-white rounded-xl border border-slate-200/80 shadow-2xs space-y-2 text-xs">
@@ -2233,14 +2292,14 @@ export const ReportsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {allExpiredItemsList.length === 0 ? (
+                  {paginatedExpiredItemsList.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-8 text-center text-slate-400">
                         Tidak ada data expired yang sesuai dengan pencarian.
                       </td>
                     </tr>
                   ) : (
-                    allExpiredItemsList.map(m => {
+                    paginatedExpiredItemsList.map(m => {
                       const statusInfo = getExpiredStatus(m.expiredDate);
                       return (
                         <tr key={m.id} className="hover:bg-slate-50">
@@ -2271,15 +2330,824 @@ export const ReportsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            <PaginationControls
+              currentPage={expiredPage}
+              totalPages={Math.ceil(allExpiredItemsList.length / ITEMS_PER_PAGE)}
+              onPageChange={setExpiredPage}
+              totalItems={allExpiredItemsList.length}
+              itemsPerPage={ITEMS_PER_PAGE}
+            />
           </div>
         </div>
       )}
+
+      {/* REPORT CONTENT: PRODUK OBAT (PPN & NON-PPN) */}
+      {activeReportTab === 'produk_obat' && (() => {
+        const obatCategories = ['Obat Bebas', 'Obat Bebas Terbatas', 'Obat Keras', 'Jamu & Herbal', 'Alat Kesehatan', 'Suplemen & Vitamin'];
+
+        const basePeriodTrxs = transactions.filter(t => {
+          if (t.status !== 'Selesai') return false;
+          const tDate = t.date ? t.date.slice(0, 10) : '';
+          if (startDate && tDate < startDate) return false;
+          if (endDate && tDate > endDate) return false;
+          return true;
+        });
+
+        const obatItemsList: Array<{
+          trxId: string;
+          trxNo: string;
+          date: string;
+          customerName: string;
+          cashierName: string;
+          paymentMethod: string;
+          medicineId: string;
+          code: string;
+          name: string;
+          category: string;
+          unit: string;
+          qty: number;
+          price: number;
+          subtotal: number;
+          costPrice: number;
+          costSubtotal: number;
+          isPpn: boolean;
+          ppnRate: number;
+          dpp: number;
+          ppnVal: number;
+          margin: number;
+        }> = [];
+
+        basePeriodTrxs.forEach(t => {
+          const trxIsPpn = isPpnTransaction(t);
+          t.items.forEach(item => {
+            const medInfo = medicines.find(m => m.id === item.medicineId || m.name === item.medicineName);
+            const cat = medInfo?.category || 'Obat Bebas';
+            const isObatItem = item.itemType === 'obat' || obatCategories.includes(cat) || (item.itemType !== 'non_obat' && !['Barang Umum', 'Perawatan & Kosmetik', 'Makanan & Minuman', 'Lainnya'].includes(cat));
+
+            if (!isObatItem) return;
+
+            const isPpn = getItemIsPpn(item, t, medInfo);
+            const rate = item.ppnRate || t.ppnRate || 11;
+            const subtotal = item.subtotal || (item.price * item.qty);
+            const dpp = isPpn ? Math.round(subtotal / (1 + rate / 100)) : subtotal;
+            const ppnVal = isPpn ? (subtotal - dpp) : 0;
+            const masterMult = medInfo?.unit === 'Lusin' ? 12 : (medInfo?.unitMultiplier || 1);
+            const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
+            const rawPurchasePrice = item.purchasePrice ?? (medInfo?.purchasePrice || Math.round(item.price * 0.75));
+
+            const costPerPcs = masterMult > 1 ? rawPurchasePrice / masterMult : rawPurchasePrice;
+            const qtyPcs = item.qty * itemMult;
+            const costSubtotal = Math.round(costPerPcs * qtyPcs);
+            const hppPerUnit = item.qty > 0 ? Math.round(costSubtotal / item.qty) : costPerPcs;
+            const margin = subtotal - costSubtotal;
+
+            obatItemsList.push({
+              trxId: t.id,
+              trxNo: t.trxNo,
+              date: t.date,
+              customerName: t.customerName || 'Customer Umum',
+              cashierName: t.cashierName,
+              paymentMethod: t.paymentMethod,
+              medicineId: item.medicineId,
+              code: item.medicineCode || medInfo?.code || '-',
+              name: item.medicineName,
+              category: cat,
+              unit: item.unit,
+              qty: item.qty,
+              price: item.price,
+              subtotal,
+              costPrice: hppPerUnit,
+              costSubtotal,
+              isPpn,
+              ppnRate: rate,
+              dpp,
+              ppnVal,
+              margin,
+            });
+          });
+        });
+
+        const filteredObatItems = obatItemsList.filter(i => {
+          if (taxReportFilter === 'PPN' && !i.isPpn) return false;
+          if (taxReportFilter === 'NON_PPN' && i.isPpn) return false;
+          if (categoryFilter !== 'all' && i.category !== categoryFilter) return false;
+          if (searchPenjualan.trim()) {
+            const q = searchPenjualan.toLowerCase();
+            const matchesName = i.name.toLowerCase().includes(q);
+            const matchesCode = i.code.toLowerCase().includes(q);
+            const matchesTrx = i.trxNo.toLowerCase().includes(q);
+            const matchesCust = i.customerName.toLowerCase().includes(q);
+            if (!matchesName && !matchesCode && !matchesTrx && !matchesCust) return false;
+          }
+          return true;
+        });
+
+        const totalGross = filteredObatItems.reduce((sum, i) => sum + i.subtotal, 0);
+        const totalDpp = filteredObatItems.reduce((sum, i) => sum + i.dpp, 0);
+        const totalPpn = filteredObatItems.reduce((sum, i) => sum + i.ppnVal, 0);
+        const totalHpp = filteredObatItems.reduce((sum, i) => sum + i.costSubtotal, 0);
+        const totalMargin = totalGross - totalHpp;
+        const totalQtySold = filteredObatItems.reduce((sum, i) => sum + i.qty, 0);
+        const marginPct = totalGross > 0 ? ((totalMargin / totalGross) * 100).toFixed(1) : '0';
+
+        const ppnItems = obatItemsList.filter(i => i.isPpn);
+        const nonPpnItems = obatItemsList.filter(i => !i.isPpn);
+
+        const ppnGross = ppnItems.reduce((sum, i) => sum + i.subtotal, 0);
+        const ppnDpp = ppnItems.reduce((sum, i) => sum + i.dpp, 0);
+        const ppnValSum = ppnItems.reduce((sum, i) => sum + i.ppnVal, 0);
+        const ppnQty = ppnItems.reduce((sum, i) => sum + i.qty, 0);
+
+        const nonPpnGross = nonPpnItems.reduce((sum, i) => sum + i.subtotal, 0);
+        const nonPpnQty = nonPpnItems.reduce((sum, i) => sum + i.qty, 0);
+
+        const paginatedObatItems = filteredObatItems.slice((reportObatPage - 1) * ITEMS_PER_PAGE, reportObatPage * ITEMS_PER_PAGE);
+
+        return (
+          <div className="space-y-4">
+            {/* Filter Bar */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-xs space-y-3.5 text-xs">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0 scrollbar-none">
+                  {[
+                    { id: '1_day', label: 'Hari Ini' },
+                    { id: 'yesterday', label: 'Kemarin' },
+                    { id: '7_days', label: '7 Hari' },
+                    { id: '30_days', label: '30 Hari' },
+                    { id: 'this_month', label: 'Bulan Ini' },
+                    { id: 'this_year', label: 'Tahun Ini' },
+                    { id: 'custom', label: 'Kustom' },
+                  ].map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => handleSalesPresetChange(p.id)}
+                      className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors shrink-0 ${
+                        salesPreset === p.id
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {salesPreset === 'custom' && (
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200 text-xs">
+                      <Calendar className="w-4 h-4 text-slate-400" />
+                      <input
+                        type="date"
+                        value={startDate}
+                        onChange={e => handleStartDateChange(e.target.value)}
+                        className="bg-transparent font-medium text-slate-700 outline-none"
+                      />
+                      <span className="text-slate-400 font-bold">s/d</span>
+                      <input
+                        type="date"
+                        value={endDate}
+                        onChange={e => handleEndDateChange(e.target.value)}
+                        className="bg-transparent font-medium text-slate-700 outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sub filters row */}
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                <select
+                  value={taxReportFilter}
+                  onChange={e => setTaxReportFilter(e.target.value as any)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 text-xs outline-none focus:border-emerald-500"
+                >
+                  <option value="all">Semua Status PPN (11% & Non-PPN)</option>
+                  <option value="PPN">Hanya Obat PPN (11%)</option>
+                  <option value="NON_PPN">Hanya Obat Non-PPN (Bebas PPN)</option>
+                </select>
+
+                <select
+                  value={categoryFilter}
+                  onChange={e => setCategoryFilter(e.target.value)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 text-xs outline-none focus:border-emerald-500"
+                >
+                  <option value="all">Semua Kategori Obat</option>
+                  {obatCategories.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Cari obat, kode, no TRX, customer..."
+                    value={searchPenjualan}
+                    onChange={e => setSearchPenjualan(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <button
+                  onClick={handleResetFilters}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold flex items-center gap-1 transition-colors text-xs"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Reset
+                </button>
+              </div>
+            </div>
+
+            {/* Metrics Overview Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Omset Obat</span>
+                <span className="text-lg font-black text-slate-900 block mt-0.5">{formatRupiah(totalGross)}</span>
+                <span className="text-[10px] text-emerald-600 font-bold block mt-0.5">{totalQtySold} item terjual</span>
+              </div>
+
+              <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">DPP (Nilai Bersih)</span>
+                <span className="text-lg font-black text-emerald-700 block mt-0.5">{formatRupiah(totalDpp)}</span>
+                <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Dasar Pengenaan Pajak</span>
+              </div>
+
+              <div className="p-3.5 bg-blue-50/60 rounded-2xl border border-blue-200/80 shadow-2xs">
+                <span className="text-[10px] font-bold text-blue-800 uppercase tracking-wider block">PPN 11% Terutang</span>
+                <span className="text-lg font-black text-blue-900 block mt-0.5">{formatRupiah(totalPpn)}</span>
+                <span className="text-[10px] text-blue-700 font-bold block mt-0.5">Pajak Obat Terkumpul</span>
+              </div>
+
+              <div className="p-3.5 bg-amber-50/50 rounded-2xl border border-amber-200/80 shadow-2xs">
+                <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Total HPP Modal</span>
+                <span className="text-lg font-black text-amber-900 block mt-0.5">{formatRupiah(totalHpp)}</span>
+                <span className="text-[10px] text-amber-700 font-medium block mt-0.5">Modal Pembelian Obat</span>
+              </div>
+
+              <div className="p-3.5 bg-emerald-50/60 rounded-2xl border border-emerald-200/80 shadow-2xs">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Total Margin Laba</span>
+                <span className="text-lg font-black text-emerald-950 block mt-0.5">{formatRupiah(totalMargin)}</span>
+                <span className="text-[10px] text-emerald-700 font-extrabold block mt-0.5">Profit {marginPct}%</span>
+              </div>
+
+              <div className="p-3.5 bg-slate-900 text-white rounded-2xl shadow-2xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Status Pajak Record</span>
+                <span className="text-sm font-extrabold text-blue-300 block mt-0.5">{ppnItems.length} PPN • {nonPpnItems.length} Non-PPN</span>
+                <span className="text-[10px] text-slate-300 font-mono block mt-0.5">Total {filteredObatItems.length} Transaksi Item</span>
+              </div>
+            </div>
+
+            {/* PPN vs Non-PPN Comparison Banner */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="p-4 bg-gradient-to-br from-blue-900 to-slate-900 text-white rounded-2xl shadow-xs flex items-center justify-between">
+                <div>
+                  <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 font-extrabold text-[10px] rounded uppercase border border-blue-400/30">
+                    Penjualan Obat PPN (11%)
+                  </span>
+                  <div className="text-xl font-black mt-2">{formatRupiah(ppnGross)}</div>
+                  <div className="text-xs text-slate-300 mt-0.5">
+                    DPP: <strong>{formatRupiah(ppnDpp)}</strong> • PPN 11%: <strong className="text-blue-300">{formatRupiah(ppnValSum)}</strong>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-black text-blue-300">{ppnQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-800 text-white rounded-2xl shadow-xs flex items-center justify-between">
+                <div>
+                  <span className="px-2 py-0.5 bg-slate-700 text-slate-300 font-extrabold text-[10px] rounded uppercase border border-slate-600">
+                    Penjualan Obat Non-PPN (Bebas PPN)
+                  </span>
+                  <div className="text-xl font-black mt-2">{formatRupiah(nonPpnGross)}</div>
+                  <div className="text-xs text-slate-300 mt-0.5">
+                    Tanpa PPN (Faktur Non-PKP / Non-PPN)
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-black text-slate-300">{nonPpnQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Table Section */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
+              <div className="p-4 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-800">
+                <span className="flex items-center gap-2">
+                  <Pill className="w-4 h-4 text-emerald-600" />
+                  Rincian Penjualan Produk Obat ({filteredObatItems.length} Item)
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Menampilkan data periode {startDate} s/d {endDate}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-3">No TRX & Waktu</th>
+                      <th className="py-3 px-3">Kode & Nama Obat</th>
+                      <th className="py-3 px-3">Kategori</th>
+                      <th className="py-3 px-3 text-center">Status Tax</th>
+                      <th className="py-3 px-3 text-center">Qty</th>
+                      <th className="py-3 px-3 text-right">Harga Satuan</th>
+                      <th className="py-3 px-3 text-right">DPP (Rp)</th>
+                      <th className="py-3 px-3 text-right">PPN 11% (Rp)</th>
+                      <th className="py-3 px-3 text-right">Subtotal Omset</th>
+                      <th className="py-3 px-3 text-right">HPP Modal</th>
+                      <th className="py-3 px-3 text-right">Margin</th>
+                      <th className="py-3 px-3 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {paginatedObatItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={12} className="py-8 text-center text-slate-400 font-medium">
+                          Tidak ada transaksi penjualan produk obat ditemukan untuk kriteria filter ini.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedObatItems.map((item, idx) => (
+                        <tr key={`${item.trxId}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-2.5 px-3">
+                            <span className="font-mono font-bold text-slate-900 block">{item.trxNo}</span>
+                            <span className="text-[10px] text-slate-500">{formatDateTime(item.date)}</span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="font-mono text-slate-400 text-[10px] block">{item.code}</span>
+                            <span className="font-bold text-slate-900">{item.name}</span>
+                          </td>
+                          <td className="py-2.5 px-3 font-semibold text-slate-600">{item.category}</td>
+                          <td className="py-2.5 px-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                              item.isPpn ? 'bg-blue-100 text-blue-900 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}>
+                              {item.isPpn ? 'PPN 11%' : 'NON-PPN'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-bold text-slate-900">
+                            {item.qty} {item.unit}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-medium text-slate-700">{formatRupiah(item.price)}</td>
+                          <td className="py-2.5 px-3 text-right font-semibold text-emerald-800">{formatRupiah(item.dpp)}</td>
+                          <td className="py-2.5 px-3 text-right font-bold text-amber-700">{formatRupiah(item.ppnVal)}</td>
+                          <td className="py-2.5 px-3 text-right font-extrabold text-slate-900">{formatRupiah(item.subtotal)}</td>
+                          <td className="py-2.5 px-3 text-right font-medium text-slate-500">{formatRupiah(item.costSubtotal)}</td>
+                          <td className="py-2.5 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(item.margin)}</td>
+                          <td className="py-2.5 px-3 text-center">
+                            <button
+                              onClick={() => {
+                                const fullTrx = transactions.find(t => t.id === item.trxId || t.trxNo === item.trxNo);
+                                if (fullTrx) setSelectedTrxDetail(fullTrx);
+                              }}
+                              className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg transition-colors border border-emerald-200 font-bold text-xs inline-flex items-center justify-center gap-1"
+                              title="Lihat Detail Transaksi"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {filteredObatItems.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300 text-xs">
+                        <td colSpan={4} className="py-3 px-3 uppercase text-right">TOTAL RECORD TERFILTER ({filteredObatItems.length} ITEM):</td>
+                        <td className="py-3 px-3 text-center text-blue-900 font-extrabold">{totalQtySold}</td>
+                        <td className="py-3 px-3 text-right text-slate-400">-</td>
+                        <td className="py-3 px-3 text-right text-emerald-800">{formatRupiah(totalDpp)}</td>
+                        <td className="py-3 px-3 text-right text-amber-800">{formatRupiah(totalPpn)}</td>
+                        <td className="py-3 px-3 text-right text-slate-950 font-black">{formatRupiah(totalGross)}</td>
+                        <td className="py-3 px-3 text-right text-amber-900">{formatRupiah(totalHpp)}</td>
+                        <td className="py-3 px-3 text-right text-emerald-700">{formatRupiah(totalMargin)}</td>
+                        <td className="py-3 px-3 text-center text-slate-400">-</td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+
+              <PaginationControls
+                currentPage={reportObatPage}
+                totalPages={Math.ceil(filteredObatItems.length / ITEMS_PER_PAGE)}
+                onPageChange={setReportObatPage}
+                totalItems={filteredObatItems.length}
+                itemsPerPage={ITEMS_PER_PAGE}
+              />
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* REPORT CONTENT: PRODUK NON-OBAT (PPN & NON-PPN) */}
+      {activeReportTab === 'produk_non_obat' && (() => {
+        const nonObatCategories = ['Barang Umum', 'Perawatan & Kosmetik', 'Makanan & Minuman', 'Lainnya'];
+
+        const basePeriodTrxs = transactions.filter(t => {
+          if (t.status !== 'Selesai') return false;
+          const tDate = t.date ? t.date.slice(0, 10) : '';
+          if (startDate && tDate < startDate) return false;
+          if (endDate && tDate > endDate) return false;
+          return true;
+        });
+
+        const nonObatItemsList: Array<{
+          trxId: string;
+          trxNo: string;
+          date: string;
+          customerName: string;
+          cashierName: string;
+          paymentMethod: string;
+          medicineId: string;
+          code: string;
+          name: string;
+          category: string;
+          unit: string;
+          qty: number;
+          price: number;
+          subtotal: number;
+          costPrice: number;
+          costSubtotal: number;
+          isPpn: boolean;
+          ppnRate: number;
+          dpp: number;
+          ppnVal: number;
+          margin: number;
+        }> = [];
+
+        basePeriodTrxs.forEach(t => {
+          const trxIsPpn = isPpnTransaction(t);
+          t.items.forEach(item => {
+            const medInfo = medicines.find(m => m.id === item.medicineId || m.name === item.medicineName);
+            const cat = medInfo?.category || 'Barang Umum';
+            const isNonObatItem = item.itemType === 'non_obat' || nonObatCategories.includes(cat);
+
+            if (!isNonObatItem) return;
+
+            const isPpn = getItemIsPpn(item, t, medInfo);
+            const rate = item.ppnRate || t.ppnRate || 11;
+            const subtotal = item.subtotal || (item.price * item.qty);
+            const dpp = isPpn ? Math.round(subtotal / (1 + rate / 100)) : subtotal;
+            const ppnVal = isPpn ? (subtotal - dpp) : 0;
+            const masterMult = medInfo?.unit === 'Lusin' ? 12 : (medInfo?.unitMultiplier || 1);
+            const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
+            const rawPurchasePrice = item.purchasePrice ?? (medInfo?.purchasePrice || Math.round(item.price * 0.75));
+
+            const costPerPcs = masterMult > 1 ? rawPurchasePrice / masterMult : rawPurchasePrice;
+            const qtyPcs = item.qty * itemMult;
+            const costSubtotal = Math.round(costPerPcs * qtyPcs);
+            const hppPerUnit = item.qty > 0 ? Math.round(costSubtotal / item.qty) : costPerPcs;
+            const margin = subtotal - costSubtotal;
+
+            nonObatItemsList.push({
+              trxId: t.id,
+              trxNo: t.trxNo,
+              date: t.date,
+              customerName: t.customerName || 'Customer Umum',
+              cashierName: t.cashierName,
+              paymentMethod: t.paymentMethod,
+              medicineId: item.medicineId,
+              code: item.medicineCode || medInfo?.code || '-',
+              name: item.medicineName,
+              category: cat,
+              unit: item.unit,
+              qty: item.qty,
+              price: item.price,
+              subtotal,
+              costPrice: hppPerUnit,
+              costSubtotal,
+              isPpn,
+              ppnRate: rate,
+              dpp,
+              ppnVal,
+              margin,
+            });
+          });
+        });
+
+        const filteredNonObatItems = nonObatItemsList.filter(i => {
+          if (taxReportFilter === 'PPN' && !i.isPpn) return false;
+          if (taxReportFilter === 'NON_PPN' && i.isPpn) return false;
+          if (categoryFilter !== 'all' && i.category !== categoryFilter) return false;
+          if (searchPenjualan.trim()) {
+            const q = searchPenjualan.toLowerCase();
+            const matchesName = i.name.toLowerCase().includes(q);
+            const matchesCode = i.code.toLowerCase().includes(q);
+            const matchesTrx = i.trxNo.toLowerCase().includes(q);
+            const matchesCust = i.customerName.toLowerCase().includes(q);
+            if (!matchesName && !matchesCode && !matchesTrx && !matchesCust) return false;
+          }
+          return true;
+        });
+
+        const totalGross = filteredNonObatItems.reduce((sum, i) => sum + i.subtotal, 0);
+        const totalDpp = filteredNonObatItems.reduce((sum, i) => sum + i.dpp, 0);
+        const totalPpn = filteredNonObatItems.reduce((sum, i) => sum + i.ppnVal, 0);
+        const totalHpp = filteredNonObatItems.reduce((sum, i) => sum + i.costSubtotal, 0);
+        const totalMargin = totalGross - totalHpp;
+        const totalQtySold = filteredNonObatItems.reduce((sum, i) => sum + i.qty, 0);
+        const marginPct = totalGross > 0 ? ((totalMargin / totalGross) * 100).toFixed(1) : '0';
+
+        const ppnItems = nonObatItemsList.filter(i => i.isPpn);
+        const nonPpnItems = nonObatItemsList.filter(i => !i.isPpn);
+
+        const ppnGross = ppnItems.reduce((sum, i) => sum + i.subtotal, 0);
+        const ppnDpp = ppnItems.reduce((sum, i) => sum + i.dpp, 0);
+        const ppnValSum = ppnItems.reduce((sum, i) => sum + i.ppnVal, 0);
+        const ppnQty = ppnItems.reduce((sum, i) => sum + i.qty, 0);
+
+        const nonPpnGross = nonPpnItems.reduce((sum, i) => sum + i.subtotal, 0);
+        const nonPpnQty = nonPpnItems.reduce((sum, i) => sum + i.qty, 0);
+
+        const paginatedNonObatItems = filteredNonObatItems.slice((reportNonObatPage - 1) * ITEMS_PER_PAGE, reportNonObatPage * ITEMS_PER_PAGE);
+
+        return (
+          <div className="space-y-4">
+            {/* Filter Bar */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-xs space-y-3.5 text-xs">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0 scrollbar-none">
+                  {[
+                    { id: '1_day', label: 'Hari Ini' },
+                    { id: 'yesterday', label: 'Kemarin' },
+                    { id: '7_days', label: '7 Hari' },
+                    { id: '30_days', label: '30 Hari' },
+                    { id: 'this_month', label: 'Bulan Ini' },
+                    { id: 'this_year', label: 'Tahun Ini' },
+                    { id: 'custom', label: 'Kustom' },
+                  ].map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => handleSalesPresetChange(p.id)}
+                      className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors shrink-0 ${
+                        salesPreset === p.id
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {salesPreset === 'custom' && (
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200 text-xs">
+                      <Calendar className="w-4 h-4 text-slate-400" />
+                      <input
+                        type="date"
+                        value={startDate}
+                        onChange={e => handleStartDateChange(e.target.value)}
+                        className="bg-transparent font-medium text-slate-700 outline-none"
+                      />
+                      <span className="text-slate-400 font-bold">s/d</span>
+                      <input
+                        type="date"
+                        value={endDate}
+                        onChange={e => handleEndDateChange(e.target.value)}
+                        className="bg-transparent font-medium text-slate-700 outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sub filters row */}
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                <select
+                  value={taxReportFilter}
+                  onChange={e => setTaxReportFilter(e.target.value as any)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 text-xs outline-none focus:border-indigo-500"
+                >
+                  <option value="all">Semua Status PPN (11% & Non-PPN)</option>
+                  <option value="PPN">Hanya Non-Obat PPN (11%)</option>
+                  <option value="NON_PPN">Hanya Non-Obat Non-PPN (Bebas PPN)</option>
+                </select>
+
+                <select
+                  value={categoryFilter}
+                  onChange={e => setCategoryFilter(e.target.value)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 text-xs outline-none focus:border-indigo-500"
+                >
+                  <option value="all">Semua Kategori Non-Obat</option>
+                  {nonObatCategories.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Cari produk non-obat, kode, no TRX, customer..."
+                    value={searchPenjualan}
+                    onChange={e => setSearchPenjualan(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <button
+                  onClick={handleResetFilters}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold flex items-center gap-1 transition-colors text-xs"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Reset
+                </button>
+              </div>
+            </div>
+
+            {/* Metrics Overview Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Omset Non-Obat</span>
+                <span className="text-lg font-black text-slate-900 block mt-0.5">{formatRupiah(totalGross)}</span>
+                <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">{totalQtySold} item terjual</span>
+              </div>
+
+              <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">DPP (Nilai Bersih)</span>
+                <span className="text-lg font-black text-indigo-700 block mt-0.5">{formatRupiah(totalDpp)}</span>
+                <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Dasar Pengenaan Pajak</span>
+              </div>
+
+              <div className="p-3.5 bg-blue-50/60 rounded-2xl border border-blue-200/80 shadow-2xs">
+                <span className="text-[10px] font-bold text-blue-800 uppercase tracking-wider block">PPN 11% Terutang</span>
+                <span className="text-lg font-black text-blue-900 block mt-0.5">{formatRupiah(totalPpn)}</span>
+                <span className="text-[10px] text-blue-700 font-bold block mt-0.5">Pajak Non-Obat Terkumpul</span>
+              </div>
+
+              <div className="p-3.5 bg-amber-50/50 rounded-2xl border border-amber-200/80 shadow-2xs">
+                <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Total HPP Modal</span>
+                <span className="text-lg font-black text-amber-900 block mt-0.5">{formatRupiah(totalHpp)}</span>
+                <span className="text-[10px] text-amber-700 font-medium block mt-0.5">Modal Pembelian Non-Obat</span>
+              </div>
+
+              <div className="p-3.5 bg-indigo-50/60 rounded-2xl border border-indigo-200/80 shadow-2xs">
+                <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider block">Total Margin Laba</span>
+                <span className="text-lg font-black text-indigo-950 block mt-0.5">{formatRupiah(totalMargin)}</span>
+                <span className="text-[10px] text-indigo-700 font-extrabold block mt-0.5">Profit {marginPct}%</span>
+              </div>
+
+              <div className="p-3.5 bg-slate-900 text-white rounded-2xl shadow-2xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Status Pajak Record</span>
+                <span className="text-sm font-extrabold text-indigo-300 block mt-0.5">{ppnItems.length} PPN • {nonPpnItems.length} Non-PPN</span>
+                <span className="text-[10px] text-slate-300 font-mono block mt-0.5">Total {filteredNonObatItems.length} Transaksi Item</span>
+              </div>
+            </div>
+
+            {/* PPN vs Non-PPN Comparison Banner */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="p-4 bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-2xl shadow-xs flex items-center justify-between">
+                <div>
+                  <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 font-extrabold text-[10px] rounded uppercase border border-indigo-400/30">
+                    Penjualan Non-Obat PPN (11%)
+                  </span>
+                  <div className="text-xl font-black mt-2">{formatRupiah(ppnGross)}</div>
+                  <div className="text-xs text-slate-300 mt-0.5">
+                    DPP: <strong>{formatRupiah(ppnDpp)}</strong> • PPN 11%: <strong className="text-indigo-300">{formatRupiah(ppnValSum)}</strong>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-black text-indigo-300">{ppnQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-800 text-white rounded-2xl shadow-xs flex items-center justify-between">
+                <div>
+                  <span className="px-2 py-0.5 bg-slate-700 text-slate-300 font-extrabold text-[10px] rounded uppercase border border-slate-600">
+                    Penjualan Non-Obat Non-PPN (Bebas PPN)
+                  </span>
+                  <div className="text-xl font-black mt-2">{formatRupiah(nonPpnGross)}</div>
+                  <div className="text-xs text-slate-300 mt-0.5">
+                    Tanpa PPN (Faktur Non-PKP / Non-PPN)
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-black text-slate-300">{nonPpnQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Table Section */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
+              <div className="p-4 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-800">
+                <span className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-indigo-600" />
+                  Rincian Penjualan Produk Non-Obat ({filteredNonObatItems.length} Item)
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Menampilkan data periode {startDate} s/d {endDate}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-3">No TRX & Waktu</th>
+                      <th className="py-3 px-3">Kode & Nama Produk</th>
+                      <th className="py-3 px-3">Kategori</th>
+                      <th className="py-3 px-3 text-center">Status Tax</th>
+                      <th className="py-3 px-3 text-center">Qty</th>
+                      <th className="py-3 px-3 text-right">Harga Satuan</th>
+                      <th className="py-3 px-3 text-right">DPP (Rp)</th>
+                      <th className="py-3 px-3 text-right">PPN 11% (Rp)</th>
+                      <th className="py-3 px-3 text-right">Subtotal Omset</th>
+                      <th className="py-3 px-3 text-right">HPP Modal</th>
+                      <th className="py-3 px-3 text-right">Margin</th>
+                      <th className="py-3 px-3 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {paginatedNonObatItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={12} className="py-8 text-center text-slate-400 font-medium">
+                          Tidak ada transaksi penjualan produk non-obat ditemukan untuk kriteria filter ini.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedNonObatItems.map((item, idx) => (
+                        <tr key={`${item.trxId}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-2.5 px-3">
+                            <span className="font-mono font-bold text-slate-900 block">{item.trxNo}</span>
+                            <span className="text-[10px] text-slate-500">{formatDateTime(item.date)}</span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="font-mono text-slate-400 text-[10px] block">{item.code}</span>
+                            <span className="font-bold text-slate-900">{item.name}</span>
+                          </td>
+                          <td className="py-2.5 px-3 font-semibold text-slate-600">{item.category}</td>
+                          <td className="py-2.5 px-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                              item.isPpn ? 'bg-blue-100 text-blue-900 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}>
+                              {item.isPpn ? 'PPN 11%' : 'NON-PPN'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-bold text-slate-900">
+                            {item.qty} {item.unit}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-medium text-slate-700">{formatRupiah(item.price)}</td>
+                          <td className="py-2.5 px-3 text-right font-semibold text-indigo-800">{formatRupiah(item.dpp)}</td>
+                          <td className="py-2.5 px-3 text-right font-bold text-amber-700">{formatRupiah(item.ppnVal)}</td>
+                          <td className="py-2.5 px-3 text-right font-extrabold text-slate-900">{formatRupiah(item.subtotal)}</td>
+                          <td className="py-2.5 px-3 text-right font-medium text-slate-500">{formatRupiah(item.costSubtotal)}</td>
+                          <td className="py-2.5 px-3 text-right font-extrabold text-indigo-700">{formatRupiah(item.margin)}</td>
+                          <td className="py-2.5 px-3 text-center">
+                            <button
+                              onClick={() => {
+                                const fullTrx = transactions.find(t => t.id === item.trxId || t.trxNo === item.trxNo);
+                                if (fullTrx) setSelectedTrxDetail(fullTrx);
+                              }}
+                              className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-lg transition-colors border border-indigo-200 font-bold text-xs inline-flex items-center justify-center gap-1"
+                              title="Lihat Detail Transaksi"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {filteredNonObatItems.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300 text-xs">
+                        <td colSpan={4} className="py-3 px-3 uppercase text-right">TOTAL RECORD TERFILTER ({filteredNonObatItems.length} ITEM):</td>
+                        <td className="py-3 px-3 text-center text-blue-900 font-extrabold">{totalQtySold}</td>
+                        <td className="py-3 px-3 text-right text-slate-400">-</td>
+                        <td className="py-3 px-3 text-right text-indigo-800">{formatRupiah(totalDpp)}</td>
+                        <td className="py-3 px-3 text-right text-amber-800">{formatRupiah(totalPpn)}</td>
+                        <td className="py-3 px-3 text-right text-slate-950 font-black">{formatRupiah(totalGross)}</td>
+                        <td className="py-3 px-3 text-right text-amber-900">{formatRupiah(totalHpp)}</td>
+                        <td className="py-3 px-3 text-right text-indigo-700">{formatRupiah(totalMargin)}</td>
+                        <td className="py-3 px-3 text-center text-slate-400">-</td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+
+              <PaginationControls
+                currentPage={reportNonObatPage}
+                totalPages={Math.ceil(filteredNonObatItems.length / ITEMS_PER_PAGE)}
+                onPageChange={setReportNonObatPage}
+                totalItems={filteredNonObatItems.length}
+                itemsPerPage={ITEMS_PER_PAGE}
+              />
+            </div>
+          </div>
+        );
+      })()}
       {/* REPORT CONTENT 6: PAJAK PPN & NON-PPN */}
       {activeReportTab === 'pajak_ppn' && (() => {
         // Base completed transactions in date range
         const basePeriodTransactions = transactions.filter(t => {
           if (t.status !== 'Selesai') return false;
-          const tDate = t.date.split(' ')[0] || t.date.split('T')[0];
+          const tDate = t.date ? t.date.slice(0, 10) : '';
           if (startDate && tDate < startDate) return false;
           if (endDate && tDate > endDate) return false;
           return true;
@@ -2335,29 +3203,7 @@ export const ReportsView: React.FC = () => {
         }, 0);
 
         const tableTotalBruto = taxTransactions.reduce((sum, t) => sum + t.totalAmount, 0);
-
-        const handleExportTaxCSV = () => {
-          const rows = [
-            ['NO_FAKTUR_TRX', 'TANGGAL', 'CUSTOMER', 'KASIR', 'JENIS_TRANSAKSI', 'TOTAL_FAKTUR_RP', 'DPP_RP', 'PPN_11_RP'],
-            ...taxTransactions.map(t => {
-              const isPpn = isPpnTransaction(t);
-              const rate = t.ppnRate || 11;
-              const dpp = isPpn ? (t.dppAmount ?? Math.round(t.totalAmount / (1 + rate / 100))) : t.totalAmount;
-              const ppn = isPpn ? (t.ppnAmount ?? (t.totalAmount - dpp)) : 0;
-              return [
-                t.trxNo,
-                t.date,
-                t.customerName || 'Customer Umum',
-                t.cashierName,
-                isPpn ? 'FAKTUR PPN 11%' : 'NOTA NON-PPN',
-                t.totalAmount.toString(),
-                dpp.toString(),
-                ppn.toString(),
-              ];
-            }),
-          ];
-          handleExportCSV(`Laporan_Perpajakan_${taxReportFilter}_${startDate}_s.d_${endDate}`, rows);
-        };
+        const paginatedTaxTransactions = taxTransactions.slice((pajakPpnPage - 1) * ITEMS_PER_PAGE, pajakPpnPage * ITEMS_PER_PAGE);
 
         return (
           <div className="space-y-4">
@@ -2427,33 +3273,29 @@ export const ReportsView: React.FC = () => {
                 </div>
 
                 {/* Date Input Pickers */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
-                    <span className="text-[10px] text-slate-400 font-bold">Dari:</span>
-                    <input
-                      type="date"
-                      value={startDate}
-                      onChange={e => {
-                        setStartDate(e.target.value);
-                        setSalesPreset('custom');
-                      }}
-                      className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
-                    />
+                {salesPreset === 'custom' && (
+                  <div className="flex items-center gap-2 shrink-0 transition-all duration-300">
+                    <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold">Dari:</span>
+                      <input
+                        type="date"
+                        value={startDate}
+                        onChange={e => handleStartDateChange(e.target.value)}
+                        className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
+                      />
+                    </div>
+                    <span className="text-slate-400 font-bold text-xs">s/d</span>
+                    <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold">Sampai:</span>
+                      <input
+                        type="date"
+                        value={endDate}
+                        onChange={e => handleEndDateChange(e.target.value)}
+                        className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
+                      />
+                    </div>
                   </div>
-                  <span className="text-slate-400 font-bold text-xs">s/d</span>
-                  <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
-                    <span className="text-[10px] text-slate-400 font-bold">Sampai:</span>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={e => {
-                        setEndDate(e.target.value);
-                        setSalesPreset('custom');
-                      }}
-                      className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
-                    />
-                  </div>
-                </div>
+                )}
               </div>
 
               {/* ROW 2: Tax Type Filter & Export / Print Actions */}
@@ -2490,24 +3332,8 @@ export const ReportsView: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 w-full sm:w-auto shrink-0 justify-end">
-                  <button
-                    type="button"
-                    onClick={handleExportTaxCSV}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs flex items-center gap-1.5 transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" /> Export Excel/CSV Pajak
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handlePrintReport}
-                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-xs flex items-center gap-1.5 transition-colors"
-                  >
-                    <Printer className="w-3.5 h-3.5" /> Cetak Laporan
-                  </button>
                 </div>
               </div>
-            </div>
 
             {/* KPI Summary Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -2579,14 +3405,14 @@ export const ReportsView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {taxTransactions.length === 0 ? (
+                    {paginatedTaxTransactions.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="py-8 text-center text-slate-400">
                           Tidak ada data transaksi perpajakan dalam periode terpilih.
                         </td>
                       </tr>
                     ) : (
-                      taxTransactions.map(t => {
+                      paginatedTaxTransactions.map(t => {
                         const isPpn = isPpnTransaction(t);
                         const rate = t.ppnRate || 11;
                         const dpp = isPpn ? (t.dppAmount ?? Math.round(t.totalAmount / (1 + rate / 100))) : t.totalAmount;
@@ -2648,6 +3474,13 @@ export const ReportsView: React.FC = () => {
                   )}
                 </table>
               </div>
+              <PaginationControls
+                currentPage={pajakPpnPage}
+                totalPages={Math.ceil(taxTransactions.length / ITEMS_PER_PAGE)}
+                onPageChange={setPajakPpnPage}
+                totalItems={taxTransactions.length}
+                itemsPerPage={ITEMS_PER_PAGE}
+              />
             </div>
           </div>
         );
@@ -2770,57 +3603,76 @@ export const ReportsView: React.FC = () => {
                         : 'Bebas PPN (Non-PPN)'}
                     </span>
                   </div>
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase">
-                        <th className="py-2.5 px-3">Kode & Nama Obat</th>
-                        <th className="py-2.5 px-3 text-center">Status & Nominal PPN</th>
-                        <th className="py-2.5 px-3 text-center">Harga Satuan</th>
-                        <th className="py-2.5 px-3 text-center">Qty</th>
-                        <th className="py-2.5 px-3 text-right">Subtotal</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {selectedTrxDetail.items?.map((item: any, idx: number) => {
-                        const itemIsPpn = item.isPpn !== false && (isPpnTransaction(selectedTrxDetail) || item.isPpn);
-                        const itemDpp = Math.round(item.subtotal / (1 + (item.ppnRate || 11) / 100));
-                        const itemPpnVal = itemIsPpn ? item.subtotal - itemDpp : 0;
+                  {(() => {
+                    const trxItems = selectedTrxDetail.items || [];
+                    const paginatedTrxItems = trxItems.slice((modalTrxItemsPage - 1) * MODAL_ITEMS_PER_PAGE, modalTrxItemsPage * MODAL_ITEMS_PER_PAGE);
 
-                        return (
-                          <tr key={idx} className="hover:bg-slate-50">
-                            <td className="py-2 px-3">
-                              <span className="font-mono text-slate-400 text-[10px] block">{item.medicineCode || item.code || '-'}</span>
-                              <span className="font-bold text-slate-900">{item.medicineName || item.name}</span>
-                            </td>
-                            <td className="py-2 px-3 text-center">
-                              {itemIsPpn ? (
-                                <div>
-                                  <span className="text-[9px] font-extrabold bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200 inline-block">
-                                    PPN 11%
-                                  </span>
-                                  <span className="block text-[10px] font-extrabold text-blue-700 mt-0.5">
-                                    PPN: {formatRupiah(itemPpnVal)}
-                                  </span>
-                                </div>
-                              ) : (
-                                <div>
-                                  <span className="text-[9px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 inline-block">
-                                    Non-PPN
-                                  </span>
-                                  <span className="block text-[10px] font-medium text-slate-400 mt-0.5">
-                                    Rp 0
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-                            <td className="py-2 px-3 text-center font-medium text-slate-700">{formatRupiah(item.price)}</td>
-                            <td className="py-2 px-3 text-center font-bold text-slate-900">{item.qty} {item.unit || 'pcs'}</td>
-                            <td className="py-2 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(item.subtotal)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                    return (
+                      <div className="flex flex-col">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase">
+                                <th className="py-2.5 px-3">Kode & Nama Obat</th>
+                                <th className="py-2.5 px-3 text-center">Status & Nominal PPN</th>
+                                <th className="py-2.5 px-3 text-center">Harga Satuan</th>
+                                <th className="py-2.5 px-3 text-center">Qty</th>
+                                <th className="py-2.5 px-3 text-right">Subtotal</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {paginatedTrxItems.map((item: any, idx: number) => {
+                                const medInfo = medicines.find(m => m.id === item.medicineId || m.name === item.medicineName);
+                                const itemIsPpn = getItemIsPpn(item, selectedTrxDetail, medInfo);
+                                const itemDpp = Math.round(item.subtotal / (1 + (item.ppnRate || 11) / 100));
+                                const itemPpnVal = itemIsPpn ? item.subtotal - itemDpp : 0;
+
+                                return (
+                                  <tr key={idx} className="hover:bg-slate-50">
+                                    <td className="py-2 px-3">
+                                      <span className="font-mono text-slate-400 text-[10px] block">{item.medicineCode || item.code || '-'}</span>
+                                      <span className="font-bold text-slate-900">{item.medicineName || item.name}</span>
+                                    </td>
+                                    <td className="py-2 px-3 text-center">
+                                      {itemIsPpn ? (
+                                        <div>
+                                          <span className="text-[9px] font-extrabold bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200 inline-block">
+                                            PPN 11%
+                                          </span>
+                                          <span className="block text-[10px] font-extrabold text-blue-700 mt-0.5">
+                                            PPN: {formatRupiah(itemPpnVal)}
+                                          </span>
+                                        </div>
+                                      ) : (
+                                        <div>
+                                          <span className="text-[9px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 inline-block">
+                                            Non-PPN
+                                          </span>
+                                          <span className="block text-[10px] font-medium text-slate-400 mt-0.5">
+                                            Rp 0
+                                          </span>
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="py-2 px-3 text-center font-medium text-slate-700">{formatRupiah(item.price)}</td>
+                                    <td className="py-2 px-3 text-center font-bold text-slate-900">{item.qty} {item.unit || 'pcs'}</td>
+                                    <td className="py-2 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(item.subtotal)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        <PaginationControls
+                          currentPage={modalTrxItemsPage}
+                          totalPages={Math.ceil(trxItems.length / MODAL_ITEMS_PER_PAGE)}
+                          onPageChange={setModalTrxItemsPage}
+                          totalItems={trxItems.length}
+                          itemsPerPage={MODAL_ITEMS_PER_PAGE}
+                        />
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -2902,36 +3754,47 @@ export const ReportsView: React.FC = () => {
                   </div>
                   {(() => {
                     const medTrxs = transactions.filter(t => t.status === 'Selesai' && t.items.some(i => i.medicineId === selectedMedicineDetail.id || i.medicineName === selectedMedicineDetail.name));
+                    const paginatedMedTrxs = medTrxs.slice((modalMedicineTrxPage - 1) * MODAL_ITEMS_PER_PAGE, modalMedicineTrxPage * MODAL_ITEMS_PER_PAGE);
+
                     if (medTrxs.length === 0) {
                       return <div className="p-6 text-center text-slate-400 text-xs font-medium">Belum ada riwayat transaksi penjualan tercatat untuk obat ini.</div>;
                     }
                     return (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase">
-                              <th className="py-2.5 px-3">No TRX</th>
-                              <th className="py-2.5 px-3">Tanggal Waktu</th>
-                              <th className="py-2.5 px-3">Customer</th>
-                              <th className="py-2.5 px-3 text-center">Qty Terjual</th>
-                              <th className="py-2.5 px-3 text-right">Subtotal Omset</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {medTrxs.map(t => {
-                              const item = t.items.find(i => i.medicineId === selectedMedicineDetail.id || i.medicineName === selectedMedicineDetail.name);
-                              return (
-                                <tr key={t.id} className="hover:bg-slate-50">
-                                  <td className="py-2 px-3 font-mono font-bold text-slate-900">{t.trxNo}</td>
-                                  <td className="py-2 px-3 text-slate-600">{formatDateTime(t.date)}</td>
-                                  <td className="py-2 px-3 font-semibold text-slate-800">{t.customerName || 'Umum'}</td>
-                                  <td className="py-2 px-3 text-center font-bold text-blue-700">{item?.qty || 0} {selectedMedicineDetail.unit}</td>
-                                  <td className="py-2 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(item?.subtotal || 0)}</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                      <div className="flex flex-col">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase">
+                                <th className="py-2.5 px-3">No TRX</th>
+                                <th className="py-2.5 px-3">Tanggal Waktu</th>
+                                <th className="py-2.5 px-3">Customer</th>
+                                <th className="py-2.5 px-3 text-center">Qty Terjual</th>
+                                <th className="py-2.5 px-3 text-right">Subtotal Omset</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {paginatedMedTrxs.map(t => {
+                                const item = t.items.find(i => i.medicineId === selectedMedicineDetail.id || i.medicineName === selectedMedicineDetail.name);
+                                return (
+                                  <tr key={t.id} className="hover:bg-slate-50">
+                                    <td className="py-2 px-3 font-mono font-bold text-slate-900">{t.trxNo}</td>
+                                    <td className="py-2 px-3 text-slate-600">{formatDateTime(t.date)}</td>
+                                    <td className="py-2 px-3 font-semibold text-slate-800">{t.customerName || 'Umum'}</td>
+                                    <td className="py-2 px-3 text-center font-bold text-blue-700">{item?.qty || 0} {selectedMedicineDetail.unit}</td>
+                                    <td className="py-2 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(item?.subtotal || 0)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        <PaginationControls
+                          currentPage={modalMedicineTrxPage}
+                          totalPages={Math.ceil(medTrxs.length / MODAL_ITEMS_PER_PAGE)}
+                          onPageChange={setModalMedicineTrxPage}
+                          totalItems={medTrxs.length}
+                          itemsPerPage={MODAL_ITEMS_PER_PAGE}
+                        />
                       </div>
                     );
                   })()}
@@ -2947,42 +3810,53 @@ export const ReportsView: React.FC = () => {
                   </div>
                   {(() => {
                     const medHistory = (stockHistory || []).filter((h: any) => h.medicineId === selectedMedicineDetail.id || h.medicineName === selectedMedicineDetail.name);
+                    const paginatedMedHistory = medHistory.slice((modalMedicineHistoryPage - 1) * MODAL_ITEMS_PER_PAGE, modalMedicineHistoryPage * MODAL_ITEMS_PER_PAGE);
+
                     if (medHistory.length === 0) {
                       return <div className="p-6 text-center text-slate-400 text-xs font-medium">Belum ada catatan mutasi stok tersimpan.</div>;
                     }
                     return (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase">
-                              <th className="py-2.5 px-3">Tanggal Waktu</th>
-                              <th className="py-2.5 px-3">Jenis Mutasi</th>
-                              <th className="py-2.5 px-3 text-center">Perubahan Qty</th>
-                              <th className="py-2.5 px-3 text-center">Sisa Stok</th>
-                              <th className="py-2.5 px-3">Petugas & Catatan</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {medHistory.map((h: any, idx: number) => (
-                              <tr key={idx} className="hover:bg-slate-50">
-                                <td className="py-2 px-3 text-slate-600 font-medium">{formatDateTime(h.date)}</td>
-                                <td className="py-2 px-3">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    h.type === 'RESTOCK' || h.type === 'MASUK' ? 'bg-emerald-100 text-emerald-800' :
-                                    h.type === 'PENJUALAN' || h.type === 'KELUAR' ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-700'
-                                  }`}>
-                                    {h.type}
-                                  </span>
-                                </td>
-                                <td className="py-2 px-3 text-center font-bold">{h.changeQty > 0 ? `+${h.changeQty}` : h.changeQty}</td>
-                                <td className="py-2 px-3 text-center font-mono font-bold text-slate-900">{h.finalStock ?? '-'}</td>
-                                <td className="py-2 px-3 text-slate-600 text-[11px]">
-                                  <strong>{h.user || 'Sistem'}</strong>: {h.notes || h.reason || '-'}
-                                </td>
+                      <div className="flex flex-col">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase">
+                                <th className="py-2.5 px-3">Tanggal Waktu</th>
+                                <th className="py-2.5 px-3">Jenis Mutasi</th>
+                                <th className="py-2.5 px-3 text-center">Perubahan Qty</th>
+                                <th className="py-2.5 px-3 text-center">Sisa Stok</th>
+                                <th className="py-2.5 px-3">Petugas & Catatan</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {paginatedMedHistory.map((h: any, idx: number) => (
+                                <tr key={idx} className="hover:bg-slate-50">
+                                  <td className="py-2 px-3 text-slate-600 font-medium">{formatDateTime(h.date)}</td>
+                                  <td className="py-2 px-3">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                      h.type === 'RESTOCK' || h.type === 'MASUK' ? 'bg-emerald-100 text-emerald-800' :
+                                      h.type === 'PENJUALAN' || h.type === 'KELUAR' ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-700'
+                                    }`}>
+                                      {h.type}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3 text-center font-bold">{h.changeQty > 0 ? `+${h.changeQty}` : h.changeQty}</td>
+                                  <td className="py-2 px-3 text-center font-mono font-bold text-slate-900">{h.finalStock ?? '-'}</td>
+                                  <td className="py-2 px-3 text-slate-600 text-[11px]">
+                                    <strong>{h.user || 'Sistem'}</strong>: {h.notes || h.reason || '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <PaginationControls
+                          currentPage={modalMedicineHistoryPage}
+                          totalPages={Math.ceil(medHistory.length / MODAL_ITEMS_PER_PAGE)}
+                          onPageChange={setModalMedicineHistoryPage}
+                          totalItems={medHistory.length}
+                          itemsPerPage={MODAL_ITEMS_PER_PAGE}
+                        />
                       </div>
                     );
                   })()}

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Doctor } from '../types';
+import { PaginationControls } from '../components/PaginationControls';
 import { formatRupiah, formatDateTime } from '../utils/formatters';
 import {
   Stethoscope,
@@ -30,6 +31,12 @@ export const DoctorsView: React.FC = () => {
   } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingDoctor, setEditingDoctor] = useState<Doctor | null>(null);
   const [deletingDoctor, setDeletingDoctor] = useState<Doctor | null>(null);
@@ -104,6 +111,11 @@ export const DoctorsView: React.FC = () => {
       d.phone.includes(searchTerm)
   );
 
+  const paginatedDoctors = filteredDoctors.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
@@ -146,12 +158,12 @@ export const DoctorsView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
         {/* Mobile & Tablet Card List Layout */}
         <div className="lg:hidden p-3 space-y-3 bg-slate-50/50">
-          {filteredDoctors.length === 0 ? (
+          {paginatedDoctors.length === 0 ? (
             <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
               Tidak ada data dokter yang cocok.
             </div>
           ) : (
-            filteredDoctors.map(doc => {
+            paginatedDoctors.map(doc => {
               const unpaidCommission = Math.max(0, doc.totalCommissionEarned - doc.totalCommissionPaid);
 
               return (
@@ -236,14 +248,14 @@ export const DoctorsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredDoctors.length === 0 ? (
+              {paginatedDoctors.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="py-8 text-center text-slate-400">
                     Tidak ada data dokter yang cocok.
                   </td>
                 </tr>
               ) : (
-                filteredDoctors.map(doc => {
+                paginatedDoctors.map(doc => {
                   return (
                     <tr key={doc.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-4">
@@ -310,6 +322,13 @@ export const DoctorsView: React.FC = () => {
             </tbody>
           </table>
         </div>
+        <PaginationControls
+          currentPage={currentPage}
+          totalPages={Math.ceil(filteredDoctors.length / ITEMS_PER_PAGE)}
+          onPageChange={setCurrentPage}
+          totalItems={filteredDoctors.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+        />
       </div>
 
       {/* Add / Edit Doctor Modal */}

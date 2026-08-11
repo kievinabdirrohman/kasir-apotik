@@ -1,6 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { formatRupiah, formatDateTime, formatCashierName } from '../utils/formatters';
+import { formatRupiah, formatDateTime, formatCashierName, isPpnTransaction } from '../utils/formatters';
 import { Printer, X, CheckCircle, Stethoscope, User, ShoppingBag } from 'lucide-react';
 
 export const ReceiptModal: React.FC = () => {
@@ -158,15 +158,15 @@ export const ReceiptModal: React.FC = () => {
                 </div>
               )}
 
-              {lastTransaction.taxType === 'PPN' && (
+              {isPpnTransaction(lastTransaction) && (
                 <div className="space-y-1 pb-1.5 border-b border-dashed border-slate-200">
                   <div className="flex justify-between text-slate-600">
                     <span>DPP (Nilai Bersih):</span>
-                    <span>{formatRupiah(lastTransaction.dppAmount || Math.round(lastTransaction.totalAmount / 1.11))}</span>
+                    <span>{formatRupiah(lastTransaction.dppAmount ?? Math.round(lastTransaction.totalAmount / 1.11))}</span>
                   </div>
                   <div className="flex justify-between text-blue-800 font-semibold">
                     <span>PPN ({lastTransaction.ppnRate || 11}%):</span>
-                    <span>{formatRupiah(lastTransaction.ppnAmount || (lastTransaction.totalAmount - Math.round(lastTransaction.totalAmount / 1.11)))}</span>
+                    <span>{formatRupiah(lastTransaction.ppnAmount ?? (lastTransaction.totalAmount - Math.round(lastTransaction.totalAmount / 1.11)))}</span>
                   </div>
                 </div>
               )}

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { ShieldCheck, Lock, User, Eye, EyeOff, Pill, AlertCircle, HelpCircle, ArrowRight, KeyRound } from 'lucide-react';
 import bannerImg from '../assets/banner.webp';
+import logoImg from '../assets/logo.png';
 
 export const LoginView: React.FC = () => {
   const { login, settings } = useApp();
@@ -53,9 +54,12 @@ export const LoginView: React.FC = () => {
           {/* Header / Brand Title */}
           <div className="space-y-3">
             <div className="flex items-center gap-3">
-              <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-lg shadow-emerald-600/30">
-                <Pill className="w-8 h-8" />
-              </div>
+              <img
+                src={logoImg}
+                alt="Apotek Logo"
+                referrerPolicy="no-referrer"
+                className="w-14 h-14 object-cover shadow-lg shadow-emerald-600/10 rounded-[8px]"
+              />
               <div>
                 <h1 className="text-2xl font-black text-slate-900 tracking-tight">
                   {settings?.name || 'Apotek Az Zainiyah'}

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Transaction } from '../types';
-import { formatRupiah, formatDateTime, getWIBDateString, isPpnTransaction } from '../utils/formatters';
+import { formatRupiah, formatDateTime, getWIBDateString, isPpnTransaction, getItemIsPpn } from '../utils/formatters';
 import {
   Receipt,
   Search,
@@ -24,6 +24,7 @@ import {
 export const TransactionsView: React.FC = () => {
   const {
     transactions,
+    medicines,
     cancelTransaction,
     currentUser,
     setLastTransaction,
@@ -200,6 +201,20 @@ export const TransactionsView: React.FC = () => {
     (datePreset !== '1_day' ? 1 : 0) +
     (searchTerm ? 1 : 0);
 
+  // Pagination Logic
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
+
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, startDate, endDate, methodFilter, prescriptionFilter, cashierFilter, taxFilter]);
+
+  const totalPages = Math.ceil(filteredTransactions.length / itemsPerPage);
+  const paginatedTransactions = filteredTransactions.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
@@ -315,33 +330,35 @@ export const TransactionsView: React.FC = () => {
           </div>
 
           {/* Explicit Date Input Controls */}
-          <div className="flex items-center gap-2 shrink-0 text-xs">
-            <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
-              <span className="text-[10px] text-slate-400 font-bold">Dari:</span>
-              <input
-                type="date"
-                value={startDate}
-                onChange={e => {
-                  setStartDate(e.target.value);
-                  setDatePreset('custom');
-                }}
-                className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
-              />
+          {datePreset === 'custom' && (
+            <div className="flex items-center gap-2 shrink-0 text-xs transition-all duration-300">
+              <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
+                <span className="text-[10px] text-slate-400 font-bold">Dari:</span>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={e => {
+                    setStartDate(e.target.value);
+                    setDatePreset('custom');
+                  }}
+                  className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
+                />
+              </div>
+              <span className="text-slate-400 font-bold text-xs">s/d</span>
+              <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
+                <span className="text-[10px] text-slate-400 font-bold">Sampai:</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={e => {
+                    setEndDate(e.target.value);
+                    setDatePreset('custom');
+                  }}
+                  className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
+                />
+              </div>
             </div>
-            <span className="text-slate-400 font-bold text-xs">s/d</span>
-            <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
-              <span className="text-[10px] text-slate-400 font-bold">Sampai:</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={e => {
-                  setEndDate(e.target.value);
-                  setDatePreset('custom');
-                }}
-                className="bg-transparent font-bold text-slate-800 text-xs focus:outline-none"
-              />
-            </div>
-          </div>
+          )}
         </div>
 
         {/* ROW 2: Search, Status Filter & Toggle Advance Filters */}
@@ -484,12 +501,12 @@ export const TransactionsView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
         {/* Mobile & Tablet Card List Layout */}
         <div className="lg:hidden p-3 space-y-3 bg-slate-50/50">
-          {filteredTransactions.length === 0 ? (
+          {paginatedTransactions.length === 0 ? (
             <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
               Tidak ada riwayat transaksi yang cocok dengan filter.
             </div>
           ) : (
-            filteredTransactions.map(trx => (
+            paginatedTransactions.map(trx => (
               <div
                 key={trx.id}
                 className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-2xs space-y-2.5 text-xs"
@@ -589,14 +606,14 @@ export const TransactionsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredTransactions.length === 0 ? (
+              {paginatedTransactions.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-400">
                     Tidak ada riwayat transaksi yang cocok dengan filter.
                   </td>
                 </tr>
               ) : (
-                filteredTransactions.map(trx => (
+                paginatedTransactions.map(trx => (
                   <tr key={trx.id} className="hover:bg-slate-50/80 transition-colors">
                     {/* No TRX & Date */}
                     <td className="py-3 px-4">
@@ -712,6 +729,31 @@ export const TransactionsView: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination UI */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-slate-100 rounded-b-2xl">
+            <span className="text-xs text-slate-500">
+              Menampilkan {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, filteredTransactions.length)} dari {filteredTransactions.length} riwayat
+            </span>
+            <div className="flex items-center gap-1">
+              <button 
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-xs font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg"
+              >
+                Sebelumnya
+              </button>
+              <button 
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-xs font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg"
+              >
+                Selanjutnya
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Transaction Detail Modal */}
@@ -917,7 +959,8 @@ export const TransactionsView: React.FC = () => {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {selectedTrxDetail.items.map((it, idx) => {
-                          const itemIsPpn = it.isPpn !== false && (isPpnTransaction(selectedTrxDetail) || it.isPpn);
+                          const medInfo = medicines.find(m => m.id === it.medicineId || m.name === it.medicineName);
+                          const itemIsPpn = getItemIsPpn(it, selectedTrxDetail, medInfo);
                           const itemDpp = Math.round(it.subtotal / (1 + (it.ppnRate || 11) / 100));
                           const itemPpnVal = itemIsPpn ? it.subtotal - itemDpp : 0;
 

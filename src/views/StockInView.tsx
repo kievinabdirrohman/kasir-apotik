@@ -50,6 +50,50 @@ interface BulkOpnameState {
   note: string;
 }
 
+const PaginationControls = ({
+  currentPage,
+  totalPages,
+  onPageChange,
+  totalItems,
+  itemsPerPage,
+}: {
+  currentPage: number;
+  totalPages: number;
+  onPageChange: (p: number) => void;
+  totalItems: number;
+  itemsPerPage: number;
+}) => {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-4 py-3 bg-white border-t border-slate-100 rounded-b-xl text-xs">
+      <span className="text-slate-500 font-medium">
+        Menampilkan {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, totalItems)} dari {totalItems} entri
+      </span>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          disabled={currentPage === 1}
+          className="px-3 py-1.5 font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors border border-slate-200/60 shadow-2xs cursor-pointer"
+        >
+          Sebelumnya
+        </button>
+        <span className="px-2.5 py-1 font-bold text-slate-700 bg-slate-100/80 rounded-lg border border-slate-200 text-[11px]">
+          {currentPage} / {totalPages}
+        </span>
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+          disabled={currentPage === totalPages}
+          className="px-3 py-1.5 font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors border border-slate-200/60 shadow-2xs cursor-pointer"
+        >
+          Selanjutnya
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const StockInView: React.FC = () => {
   const { medicines, addMedicine, addStock, adjustStock, bulkAdjustStock, bulkAddStock, stockHistory, currentUser } = useApp();
 
@@ -516,6 +560,29 @@ export const StockInView: React.FC = () => {
   const [opnameTaxFilter, setOpnameTaxFilter] = useState<'all' | 'PPN' | 'NON_PPN'>('all');
   const [restockHistoryTaxFilter, setRestockHistoryTaxFilter] = useState<'all' | 'PPN' | 'NON_PPN'>('all');
   const [opnameHistoryTaxFilter, setOpnameHistoryTaxFilter] = useState<'all' | 'PPN' | 'NON_PPN'>('all');
+
+  // Opname Item Type Filters (Obat vs Non-Obat Separation)
+  const [opnameItemTypeFilter, setOpnameItemTypeFilter] = useState<'all' | 'obat' | 'non_obat'>('all');
+  const [opnameHistoryItemTypeFilter, setOpnameHistoryItemTypeFilter] = useState<'all' | 'obat' | 'non_obat'>('all');
+
+  // Pagination States
+  const ITEMS_PER_PAGE = 10;
+  const [restockHistoryPage, setRestockHistoryPage] = useState(1);
+  const [opnameMedicinesPage, setOpnameMedicinesPage] = useState(1);
+  const [opnameHistoryPage, setOpnameHistoryPage] = useState(1);
+
+  // Auto-reset pagination pages on filter changes
+  useEffect(() => {
+    setRestockHistoryPage(1);
+  }, [restockHistorySearch, restockHistoryTaxFilter, restockItemType]);
+
+  useEffect(() => {
+    setOpnameMedicinesPage(1);
+  }, [opnameSearchTerm, opnameCategoryFilter, opnameLocationFilter, opnameTaxFilter, opnameItemTypeFilter, showOnlyDiff, activeSubTab]);
+
+  useEffect(() => {
+    setOpnameHistoryPage(1);
+  }, [opnameHistorySearch, opnameHistoryTaxFilter, opnameHistoryItemTypeFilter]);
 
   // States for Bulk Opname by Category Inputs
   const [bulkOpnameStockVal, setBulkOpnameStockVal] = useState<string>('');
@@ -1220,6 +1287,9 @@ export const StockInView: React.FC = () => {
     'Jamu & Herbal',
     'Alat Kesehatan',
     'Suplemen & Vitamin',
+    'Barang Umum',
+    'Perawatan & Kosmetik',
+    'Makanan & Minuman',
     'Lainnya',
   ];
 
@@ -1227,8 +1297,15 @@ export const StockInView: React.FC = () => {
     new Set(medicines.map(m => m.location).filter(Boolean))
   ).sort();
 
-  // Restock History Summary Stats (PPN vs Non-PPN)
-  const allRestockLogs = React.useMemo(() => stockHistory.filter(sh => sh.type === 'masuk'), [stockHistory]);
+  // Restock History Summary Stats (PPN vs Non-PPN) - filtered by restockItemType (Obat vs Non-Obat)
+  const allRestockLogs = React.useMemo(() => stockHistory.filter(sh => {
+    if (sh.type !== 'masuk') return false;
+    const med = medicines.find(m => m.id === sh.medicineId);
+    const itemType = sh.itemType || med?.itemType || 'obat';
+    if (restockItemType === 'obat') return itemType === 'obat';
+    if (restockItemType === 'non_obat') return itemType === 'non_obat';
+    return true;
+  }), [stockHistory, medicines, restockItemType]);
   
   const ppnRestockLogs = React.useMemo(() => allRestockLogs.filter(sh => getHistoryIsPpn(sh)), [allRestockLogs, getHistoryIsPpn]);
 
@@ -1282,7 +1359,7 @@ export const StockInView: React.FC = () => {
     setTimeout(() => setIsSuccessAlert(false), 3500);
   };
 
-  // Opnam Physical Stats (PPN vs Non-PPN) - Only for active medicines
+  // Opnam Physical Stats (PPN vs Non-PPN) - Only for active medicines filtered by opnameItemTypeFilter
   const opnameTaxStats = React.useMemo(() => {
     let ppnMedCount = 0;
     let ppnSystemStock = 0;
@@ -1294,7 +1371,13 @@ export const StockInView: React.FC = () => {
     let nonPpnPhysicalStock = 0;
     let nonPpnDiff = 0;
 
-    medicines.filter(m => m.isActive).forEach(m => {
+    medicines.filter(m => {
+      if (!m.isActive) return false;
+      const medType = m.itemType || 'obat';
+      if (opnameItemTypeFilter === 'obat' && medType !== 'obat') return false;
+      if (opnameItemTypeFilter === 'non_obat' && medType !== 'non_obat') return false;
+      return true;
+    }).forEach(m => {
       const isPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
       const rawPhys = bulkOpnameData[m.id]?.physicalStock;
       const physNum = rawPhys === undefined || rawPhys === '' || isNaN(Number(rawPhys)) ? m.stock : Number(rawPhys);
@@ -1317,15 +1400,27 @@ export const StockInView: React.FC = () => {
       ppnMedCount, ppnSystemStock, ppnPhysicalStock, ppnDiff,
       nonPpnMedCount, nonPpnSystemStock, nonPpnPhysicalStock, nonPpnDiff
     };
-  }, [medicines, bulkOpnameData]);
+  }, [medicines, bulkOpnameData, opnameItemTypeFilter]);
 
   // Opnam Log Stats (PPN vs Non-PPN)
-  const allOpnameLogs = React.useMemo(() => stockHistory.filter(sh => sh.type === 'penyesuaian'), [stockHistory]);
+  const allOpnameLogs = React.useMemo(() => stockHistory.filter(sh => {
+    if (sh.type !== 'penyesuaian') return false;
+    const med = medicines.find(m => m.id === sh.medicineId);
+    const itemType = sh.itemType || med?.itemType || 'obat';
+    if (opnameHistoryItemTypeFilter === 'obat') return itemType === 'obat';
+    if (opnameHistoryItemTypeFilter === 'non_obat') return itemType === 'non_obat';
+    return true;
+  }), [stockHistory, medicines, opnameHistoryItemTypeFilter]);
+
   const ppnOpnameLogs = React.useMemo(() => allOpnameLogs.filter(sh => getHistoryIsPpn(sh)), [allOpnameLogs, getHistoryIsPpn]);
   const nonPpnOpnameLogs = React.useMemo(() => allOpnameLogs.filter(sh => !getHistoryIsPpn(sh)), [allOpnameLogs, getHistoryIsPpn]);
 
   const filteredOpnameMedicines = medicines.filter(m => {
     if (!m.isActive) return false;
+
+    const medType = m.itemType || 'obat';
+    if (opnameItemTypeFilter === 'obat' && medType !== 'obat') return false;
+    if (opnameItemTypeFilter === 'non_obat' && medType !== 'non_obat') return false;
 
     const matchesSearch =
       m.name.toLowerCase().includes(opnameSearchTerm.toLowerCase()) ||
@@ -1354,6 +1449,11 @@ export const StockInView: React.FC = () => {
   const filteredRestockHistory = stockHistory.filter(sh => {
     if (sh.type !== 'masuk') return false;
 
+    const med = medicines.find(m => m.id === sh.medicineId);
+    const itemType = sh.itemType || med?.itemType || 'obat';
+    if (restockItemType === 'obat' && itemType !== 'obat') return false;
+    if (restockItemType === 'non_obat' && itemType !== 'non_obat') return false;
+
     const isPpn = getHistoryIsPpn(sh);
     if (restockHistoryTaxFilter === 'PPN' && !isPpn) return false;
     if (restockHistoryTaxFilter === 'NON_PPN' && isPpn) return false;
@@ -1371,6 +1471,11 @@ export const StockInView: React.FC = () => {
   const filteredOpnameHistory = stockHistory.filter(sh => {
     if (sh.type !== 'penyesuaian') return false;
 
+    const med = medicines.find(m => m.id === sh.medicineId);
+    const itemType = sh.itemType || med?.itemType || 'obat';
+    if (opnameHistoryItemTypeFilter === 'obat' && itemType !== 'obat') return false;
+    if (opnameHistoryItemTypeFilter === 'non_obat' && itemType !== 'non_obat') return false;
+
     const isPpn = getHistoryIsPpn(sh);
     if (opnameHistoryTaxFilter === 'PPN' && !isPpn) return false;
     if (opnameHistoryTaxFilter === 'NON_PPN' && isPpn) return false;
@@ -1383,6 +1488,22 @@ export const StockInView: React.FC = () => {
       (sh.user && sh.user.toLowerCase().includes(q))
     );
   });
+
+  // Paginated Lists
+  const paginatedRestockHistory = filteredRestockHistory.slice(
+    (restockHistoryPage - 1) * ITEMS_PER_PAGE,
+    restockHistoryPage * ITEMS_PER_PAGE
+  );
+
+  const paginatedOpnameMedicines = filteredOpnameMedicines.slice(
+    (opnameMedicinesPage - 1) * ITEMS_PER_PAGE,
+    opnameMedicinesPage * ITEMS_PER_PAGE
+  );
+
+  const paginatedOpnameHistory = filteredOpnameHistory.slice(
+    (opnameHistoryPage - 1) * ITEMS_PER_PAGE,
+    opnameHistoryPage * ITEMS_PER_PAGE
+  );
 
   return (
     <div className="space-y-6 pb-8">
@@ -1624,14 +1745,14 @@ export const StockInView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredRestockHistory.length === 0 ? (
+                    {paginatedRestockHistory.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="py-8 text-center text-slate-400">
                           Belum ada riwayat penerimaan stok masuk yang tercatat.
                         </td>
                       </tr>
                     ) : (
-                      filteredRestockHistory.map((sh, idx) => {
+                      paginatedRestockHistory.map((sh, idx) => {
                         const isPpn = getHistoryIsPpn(sh);
                         const med = medicines.find(m => m.id === sh.medicineId);
                         
@@ -1708,6 +1829,13 @@ export const StockInView: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={restockHistoryPage}
+                totalPages={Math.ceil(filteredRestockHistory.length / ITEMS_PER_PAGE)}
+                onPageChange={setRestockHistoryPage}
+                totalItems={filteredRestockHistory.length}
+                itemsPerPage={ITEMS_PER_PAGE}
+              />
             </div>
         </div>
       )}
@@ -1940,63 +2068,104 @@ export const StockInView: React.FC = () => {
 
                 {/* Opname Filter Bar */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs">
-                  <div className="flex items-center gap-2 overflow-x-auto">
-                    <span className="font-bold text-slate-700 shrink-0">Status Pajak:</span>
-                    <button
-                      type="button"
-                      onClick={() => setOpnameTaxFilter('all')}
-                      className={`px-3 py-1 rounded-xl font-bold transition-all ${
-                        opnameTaxFilter === 'all'
-                          ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      Semua Sediaan ({medicines.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOpnameTaxFilter('PPN')}
-                      className={`px-3 py-1 rounded-xl font-bold transition-all border ${
-                        opnameTaxFilter === 'PPN'
-                          ? 'bg-blue-900 text-white border-blue-800 shadow-2xs font-extrabold'
-                          : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
-                      }`}
-                    >
-                      🏷️ Obat PPN 11% ({opnameTaxStats.ppnMedCount})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOpnameTaxFilter('NON_PPN')}
-                      className={`px-3 py-1 rounded-xl font-bold transition-all border ${
-                        opnameTaxFilter === 'NON_PPN'
-                          ? 'bg-slate-900 text-white border-slate-800 shadow-2xs font-extrabold'
-                          : 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
-                      }`}
-                    >
-                      📦 Obat Non-PPN ({opnameTaxStats.nonPpnMedCount})
-                    </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1.5 overflow-x-auto">
+                      <span className="font-bold text-slate-700 shrink-0">Jenis Sediaan:</span>
+                      <button
+                        type="button"
+                        onClick={() => setOpnameItemTypeFilter('all')}
+                        className={`px-3 py-1 rounded-xl font-bold transition-all cursor-pointer ${
+                          opnameItemTypeFilter === 'all'
+                            ? 'bg-purple-600 text-white shadow-2xs font-extrabold'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Semua ({medicines.filter(m => m.isActive).length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOpnameItemTypeFilter('obat')}
+                        className={`px-3 py-1 rounded-xl font-bold transition-all border cursor-pointer ${
+                          opnameItemTypeFilter === 'obat'
+                            ? 'bg-emerald-700 text-white border-emerald-800 shadow-2xs font-extrabold'
+                            : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100'
+                        }`}
+                      >
+                        💊 Obat ({medicines.filter(m => m.isActive && (m.itemType || 'obat') === 'obat').length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOpnameItemTypeFilter('non_obat')}
+                        className={`px-3 py-1 rounded-xl font-bold transition-all border cursor-pointer ${
+                          opnameItemTypeFilter === 'non_obat'
+                            ? 'bg-purple-900 text-white border-purple-800 shadow-2xs font-extrabold'
+                            : 'bg-purple-50 text-purple-900 border-purple-200 hover:bg-purple-100'
+                        }`}
+                      >
+                        🛍️ Non-Obat ({medicines.filter(m => m.isActive && m.itemType === 'non_obat').length})
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 overflow-x-auto border-l border-slate-200 pl-2">
+                      <span className="font-bold text-slate-700 shrink-0">Status Pajak:</span>
+                      <button
+                        type="button"
+                        onClick={() => setOpnameTaxFilter('all')}
+                        className={`px-2.5 py-1 rounded-xl font-bold transition-all cursor-pointer ${
+                          opnameTaxFilter === 'all'
+                            ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Semua
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOpnameTaxFilter('PPN')}
+                        className={`px-2.5 py-1 rounded-xl font-bold transition-all border cursor-pointer ${
+                          opnameTaxFilter === 'PPN'
+                            ? 'bg-blue-900 text-white border-blue-800 shadow-2xs font-extrabold'
+                            : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
+                        }`}
+                      >
+                        🏷️ PPN 11%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOpnameTaxFilter('NON_PPN')}
+                        className={`px-2.5 py-1 rounded-xl font-bold transition-all border cursor-pointer ${
+                          opnameTaxFilter === 'NON_PPN'
+                            ? 'bg-slate-900 text-white border-slate-800 shadow-2xs font-extrabold'
+                            : 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        📦 Non-PPN
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="relative w-full sm:w-64">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      placeholder="Cari kode, nama obat, lokasi..."
-                      value={opnameSearchTerm}
-                      onChange={e => setOpnameSearchTerm(e.target.value)}
-                      className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="relative w-full sm:w-56">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Cari kode, nama, lokasi..."
+                        value={opnameSearchTerm}
+                        onChange={e => setOpnameSearchTerm(e.target.value)}
+                        className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
 
-                  <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl text-xs hover:bg-slate-200 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={showOnlyDiff}
-                      onChange={e => setShowOnlyDiff(e.target.checked)}
-                      className="rounded text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <span>Hanya Tampilkan Barang Yang Selisih Stok</span>
-                  </label>
+                    <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl text-xs hover:bg-slate-200 transition-colors shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={showOnlyDiff}
+                        onChange={e => setShowOnlyDiff(e.target.checked)}
+                        className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                      />
+                      <span>Hanya Selisih Stok</span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
@@ -2017,14 +2186,14 @@ export const StockInView: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredOpnameMedicines.length === 0 ? (
+                      {paginatedOpnameMedicines.length === 0 ? (
                         <tr>
                           <td colSpan={8} className="py-8 text-center text-slate-400">
-                            Tidak ada sediaan obat yang sesuai dengan filter pencarian / kategori / status PPN.
+                            Tidak ada sediaan obat yang sesuai dengan filter pencarian / kategori / status PPN / jenis item.
                           </td>
                         </tr>
                       ) : (
-                        filteredOpnameMedicines.map((m, idx) => {
+                        paginatedOpnameMedicines.map((m, idx) => {
                           const rawPhys = bulkOpnameData[m.id]?.physicalStock;
                           const physNum =
                             rawPhys === undefined || rawPhys === '' || isNaN(Number(rawPhys))
@@ -2036,7 +2205,7 @@ export const StockInView: React.FC = () => {
                           return (
                             <tr key={m.id} className="hover:bg-slate-50/80 transition-colors">
                               <td className="py-2.5 px-3 text-center font-bold text-slate-400">
-                                {idx + 1}
+                                {((opnameMedicinesPage - 1) * ITEMS_PER_PAGE) + idx + 1}
                               </td>
 
                               <td className="py-2.5 px-3">
@@ -2107,6 +2276,13 @@ export const StockInView: React.FC = () => {
                       )}
                     </tbody>
                   </table>
+                  <PaginationControls
+                    currentPage={opnameMedicinesPage}
+                    totalPages={Math.ceil(filteredOpnameMedicines.length / ITEMS_PER_PAGE)}
+                    onPageChange={setOpnameMedicinesPage}
+                    totalItems={filteredOpnameMedicines.length}
+                    itemsPerPage={ITEMS_PER_PAGE}
+                  />
                 </div>
 
                 <div className="flex items-center justify-between bg-slate-900 text-white p-4 rounded-2xl shadow-md">
@@ -2146,13 +2322,51 @@ export const StockInView: React.FC = () => {
                   </h3>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Jenis Sediaan Filter Buttons */}
+                  <div className="flex items-center gap-1 text-xs border-r border-slate-200 pr-2">
+                    <span className="font-bold text-slate-500 shrink-0 mr-0.5">Jenis:</span>
+                    <button
+                      type="button"
+                      onClick={() => setOpnameHistoryItemTypeFilter('all')}
+                      className={`px-2 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                        opnameHistoryItemTypeFilter === 'all'
+                          ? 'bg-purple-600 text-white shadow-2xs font-extrabold'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      Semua
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOpnameHistoryItemTypeFilter('obat')}
+                      className={`px-2 py-1 rounded-lg font-bold transition-all border cursor-pointer ${
+                        opnameHistoryItemTypeFilter === 'obat'
+                          ? 'bg-emerald-700 text-white border-emerald-800 shadow-2xs font-extrabold'
+                          : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100'
+                      }`}
+                    >
+                      💊 Obat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOpnameHistoryItemTypeFilter('non_obat')}
+                      className={`px-2 py-1 rounded-lg font-bold transition-all border cursor-pointer ${
+                        opnameHistoryItemTypeFilter === 'non_obat'
+                          ? 'bg-purple-900 text-white border-purple-800 shadow-2xs font-extrabold'
+                          : 'bg-purple-50 text-purple-900 border-purple-200 hover:bg-purple-100'
+                      }`}
+                    >
+                      🛍️ Non-Obat
+                    </button>
+                  </div>
+
                   {/* Tax Filter Buttons */}
                   <div className="flex items-center gap-1 text-xs">
                     <button
                       type="button"
                       onClick={() => setOpnameHistoryTaxFilter('all')}
-                      className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
                         opnameHistoryTaxFilter === 'all'
                           ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
                           : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -2163,7 +2377,7 @@ export const StockInView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setOpnameHistoryTaxFilter('PPN')}
-                      className={`px-2.5 py-1 rounded-lg font-bold transition-all border ${
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all border cursor-pointer ${
                         opnameHistoryTaxFilter === 'PPN'
                           ? 'bg-blue-900 text-white border-blue-800 shadow-2xs font-extrabold'
                           : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
@@ -2174,7 +2388,7 @@ export const StockInView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setOpnameHistoryTaxFilter('NON_PPN')}
-                      className={`px-2.5 py-1 rounded-lg font-bold transition-all border ${
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all border cursor-pointer ${
                         opnameHistoryTaxFilter === 'NON_PPN'
                           ? 'bg-slate-900 text-white border-slate-800 shadow-2xs font-extrabold'
                           : 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
@@ -2210,14 +2424,14 @@ export const StockInView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredOpnameHistory.length === 0 ? (
+                    {paginatedOpnameHistory.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="py-8 text-center text-slate-400">
                           Belum ada riwayat penyesuaian opnam yang sesuai filter.
                         </td>
                       </tr>
                     ) : (
-                      filteredOpnameHistory.map((sh, idx) => {
+                      paginatedOpnameHistory.map((sh, idx) => {
                         const isPpn = getHistoryIsPpn(sh);
 
                         return (
@@ -2265,6 +2479,13 @@ export const StockInView: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={opnameHistoryPage}
+                totalPages={Math.ceil(filteredOpnameHistory.length / ITEMS_PER_PAGE)}
+                onPageChange={setOpnameHistoryPage}
+                totalItems={filteredOpnameHistory.length}
+                itemsPerPage={ITEMS_PER_PAGE}
+              />
             </div>
           )}
         </div>

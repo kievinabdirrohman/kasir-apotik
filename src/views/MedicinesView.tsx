@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Medicine, MedicineCategory } from '../types';
+import { PaginationControls } from '../components/PaginationControls';
 import { formatRupiah, getExpiredStatus, getDaysUntilExpired, formatDate, formatStockDisplay } from '../utils/formatters';
 import {
   Pill,
@@ -48,7 +49,15 @@ export const MedicinesView: React.FC = () => {
   const [itemTypeFilter, setItemTypeFilter] = useState<'all' | 'obat' | 'non_obat'>('all');
 
   // Price Display Toggle in Table ('both' | 'inc' | 'non')
-  const [priceDisplayMode, setPriceDisplayMode] = useState<'both' | 'inc' | 'non'>('inc');
+  const [priceDisplayMode, setPriceDisplayMode] = useState<'both' | 'inc' | 'non'>('both');
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, categoryFilter, stockFilter, expiredFilter, statusFilter, taxFilter, itemTypeFilter]);
 
   // Modal State
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -97,6 +106,9 @@ export const MedicinesView: React.FC = () => {
     'Jamu & Herbal',
     'Alat Kesehatan',
     'Suplemen & Vitamin',
+    'Barang Umum',
+    'Perawatan & Kosmetik',
+    'Makanan & Minuman',
     'Lainnya',
   ];
 
@@ -337,6 +349,11 @@ export const MedicinesView: React.FC = () => {
     return matchesSearch && matchesCategory && matchesStock && matchesStatus && matchesExpired && matchesTax && matchesItemType;
   });
 
+  const paginatedMedicines = filteredMedicines.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
@@ -483,9 +500,11 @@ export const MedicinesView: React.FC = () => {
                 setTaxFilter(val);
                 if (val === 'ppn') setPriceDisplayMode('inc');
                 else if (val === 'non_ppn') setPriceDisplayMode('non');
+                else if (val === 'all') setPriceDisplayMode('both');
               }}
               className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-bold text-slate-800"
             >
+              <option value="all">🌐 Semua Pajak (PPN &amp; Non-PPN)</option>
               <option value="ppn">🏷️ Filter Khusus Obat PPN 11%</option>
               <option value="non_ppn">📄 Filter Khusus Obat Non-PPN</option>
             </select>
@@ -542,6 +561,19 @@ export const MedicinesView: React.FC = () => {
               <Receipt className="w-3.5 h-3.5 text-emerald-600" /> Filter Kelompok Pajak:
             </span>
             <div className="flex items-center bg-slate-100 p-1 rounded-xl font-bold text-[11px] gap-1">
+              <button
+                onClick={() => {
+                  setPriceDisplayMode('both');
+                  setTaxFilter('all');
+                }}
+                className={`px-3 py-1 rounded-lg transition-all ${
+                  taxFilter === 'all'
+                    ? 'bg-slate-800 text-white shadow-2xs font-extrabold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Semua Pajak ({medicines.length})
+              </button>
               <button
                 onClick={() => {
                   setPriceDisplayMode('inc');
@@ -613,15 +645,15 @@ export const MedicinesView: React.FC = () => {
             >
               Exp &lt; 6 Bulan
             </button>
-            {(categoryFilter !== 'all' || stockFilter !== 'all' || expiredFilter !== 'all' || statusFilter !== 'active' || taxFilter !== 'ppn' || searchTerm) && (
+            {(categoryFilter !== 'all' || stockFilter !== 'all' || expiredFilter !== 'all' || statusFilter !== 'active' || taxFilter !== 'all' || searchTerm) && (
               <button
                 onClick={() => {
                   setCategoryFilter('all');
                   setStockFilter('all');
                   setExpiredFilter('all');
                   setStatusFilter('active');
-                  setTaxFilter('ppn');
-                  setPriceDisplayMode('inc');
+                  setTaxFilter('all');
+                  setPriceDisplayMode('both');
                   setSearchTerm('');
                 }}
                 className="text-slate-500 hover:text-slate-800 underline ml-2 font-bold"
@@ -646,12 +678,12 @@ export const MedicinesView: React.FC = () => {
 
         {/* Mobile Card List Layout */}
         <div className="lg:hidden p-3 space-y-3 bg-slate-50/50">
-          {filteredMedicines.length === 0 ? (
+          {paginatedMedicines.length === 0 ? (
             <div className="py-8 text-center text-slate-400 text-xs bg-white rounded-xl border border-slate-100">
               Tidak ada obat yang cocok dengan kriteria pencarian.
             </div>
           ) : (
-            filteredMedicines.map(med => {
+            paginatedMedicines.map(med => {
               const expStatus = getExpiredStatus(med.expiredDate);
               const isLowStock = med.stock <= med.minStock;
 
@@ -845,14 +877,14 @@ export const MedicinesView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredMedicines.length === 0 ? (
+              {paginatedMedicines.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-slate-400">
                     Tidak ada obat yang cocok dengan kriteria pencarian.
                   </td>
                 </tr>
               ) : (
-                filteredMedicines.map(med => {
+                paginatedMedicines.map(med => {
                   const expStatus = getExpiredStatus(med.expiredDate);
                   const isLowStock = med.stock <= med.minStock;
 
@@ -1094,6 +1126,13 @@ export const MedicinesView: React.FC = () => {
             </tbody>
           </table>
         </div>
+        <PaginationControls
+          currentPage={currentPage}
+          totalPages={Math.ceil(filteredMedicines.length / ITEMS_PER_PAGE)}
+          onPageChange={setCurrentPage}
+          totalItems={filteredMedicines.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+        />
       </div>
 
       {/* Add / Edit Medicine Modal with StockInView layout */}

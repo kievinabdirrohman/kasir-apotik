@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { NotificationCenter } from './NotificationCenter';
 import { EditProfileModal } from './EditProfileModal';
+import logoImg from '../assets/logo.png';
 import {
   Menu,
   ShoppingCart,
@@ -62,9 +63,12 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar }) => {
 
           <div className="flex items-center gap-2 min-w-0">
             {/* Store Logo Badge */}
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold shadow-xs shadow-emerald-200 shrink-0">
-              <Store className="w-4 h-4 sm:w-5 sm:h-5" />
-            </div>
+            <img
+              src={logoImg}
+              alt="Apotek Logo"
+              referrerPolicy="no-referrer"
+              className="w-8 h-8 sm:w-9 sm:h-9 object-cover rounded-[8px] shadow-xs shrink-0"
+            />
 
             {/* Brand Title & Active Context */}
             <div className="min-w-0 flex flex-col justify-center">

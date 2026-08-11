@@ -149,11 +149,31 @@ export function isPpnTransaction(t: {
   ppnAmount?: number;
 }): boolean {
   if (t.taxType === 'NON_PPN') return false;
-  if (t.ppnRate === 0 && (t.ppnAmount ?? 0) === 0) return false;
   if (t.taxType === 'PPN') return true;
   if ((t.ppnAmount ?? 0) > 0) return true;
+  if (t.ppnRate === 0 || t.ppnAmount === 0) return false;
   if ((t.ppnRate ?? 0) > 0) return true;
   return false;
+}
+
+export function getItemIsPpn(
+  item: { isPpn?: boolean },
+  transaction: { taxType?: 'PPN' | 'NON_PPN'; ppnRate?: number; ppnAmount?: number },
+  medInfo?: { isPpnIncluded?: boolean; ppnRate?: number }
+): boolean {
+  // Non-PPN transactions never contain PPN items
+  if (!isPpnTransaction(transaction)) return false;
+
+  // Explicit item PPN flag
+  if (item.isPpn === false) return false;
+  if (item.isPpn === true) return true;
+
+  // Fallback to medicine master tax status
+  if (medInfo) {
+    return (medInfo.isPpnIncluded ?? true) && (medInfo.ppnRate ?? 11) > 0;
+  }
+
+  return true;
 }
 
 export function formatStockDisplay(

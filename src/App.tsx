@@ -43,7 +43,13 @@ const MainContent: React.FC = () => {
       case 'transactions':
         return <TransactionsView />;
       case 'reports':
-        return <ReportsView />;
+        return <ReportsView initialTab="penjualan" />;
+      case 'report-pajak-ppn':
+        return <ReportsView initialTab="pajak_ppn" />;
+      case 'report-obat':
+        return <ReportsView initialTab="produk_obat" />;
+      case 'report-non-obat':
+        return <ReportsView initialTab="produk_non_obat" />;
       case 'finances':
         return <FinancesView />;
       case 'users':
@@ -65,7 +71,7 @@ const MainContent: React.FC = () => {
         <div className="flex-1 flex flex-col min-w-0">
           <Header onToggleSidebar={() => setIsSidebarOpen(prev => !prev)} />
 
-          <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto overflow-y-auto">
+          <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full overflow-y-auto">
             {renderActiveView()}
           </main>
         </div>

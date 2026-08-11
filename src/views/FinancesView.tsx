@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatRupiah, formatDateTime, formatDate, getWIBDateString, formatStockDisplay } from '../utils/formatters';
 import {
@@ -16,7 +16,6 @@ import {
   Scale,
   Building2,
   Coins,
-  Printer,
   Eye,
   BarChart3,
   ChevronRight,
@@ -31,6 +30,33 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { CashFlowType } from '../types';
+
+const PaginationControls = ({ currentPage, totalPages, onPageChange, totalItems, itemsPerPage }: { currentPage: number, totalPages: number, onPageChange: (p: number) => void, totalItems: number, itemsPerPage: number }) => {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-slate-100 rounded-b-xl">
+      <span className="text-xs text-slate-500 font-medium">
+        Menampilkan {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, totalItems)} dari {totalItems} riwayat
+      </span>
+      <div className="flex items-center gap-1">
+        <button 
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          disabled={currentPage === 1}
+          className="px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors border border-slate-200/60 shadow-2xs"
+        >
+          Sebelumnya
+        </button>
+        <button 
+          onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+          disabled={currentPage === totalPages}
+          className="px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors border border-slate-200/60 shadow-2xs"
+        >
+          Selanjutnya
+        </button>
+      </div>
+    </div>
+  );
+};
 
 export const FinancesView: React.FC = () => {
   const {
@@ -65,7 +91,6 @@ export const FinancesView: React.FC = () => {
 
   // Laba Rugi Detail Modal & Print Modal State
   const [selectedIncomeDetail, setSelectedIncomeDetail] = useState<'penjualan' | 'hpp' | 'beban' | 'pemasukan_lain' | 'laba_bersih' | null>(null);
-  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [expandedTrxId, setExpandedTrxId] = useState<string | null>(null);
 
   // Arus Kas form & filters
@@ -80,6 +105,19 @@ export const FinancesView: React.FC = () => {
   const [cashFlowDatePreset, setCashFlowDatePreset] = useState<'semua' | 'hari_ini' | '7_hari' | '30_hari' | 'bulan_ini' | 'kustom'>('semua');
   const [cashFlowStartDate, setCashFlowStartDate] = useState<string>(() => getWIBDateString());
   const [cashFlowEndDate, setCashFlowEndDate] = useState<string>(() => getWIBDateString());
+
+  // Pagination States
+  const [arusKasPage, setArusKasPage] = useState(1);
+  const [modalPage, setModalPage] = useState(1);
+  const ITEMS_PER_PAGE = 20;
+  
+  useEffect(() => {
+    setModalPage(1);
+  }, [selectedBalanceDetail, selectedIncomeDetail, expandedTrxId]);
+
+  useEffect(() => {
+    setArusKasPage(1);
+  }, [cashFlowSearch, cashFlowTypeFilter, cashFlowDatePreset, cashFlowStartDate, cashFlowEndDate]);
 
   const handleCashFlowPresetChange = (preset: 'semua' | 'hari_ini' | '7_hari' | '30_hari' | 'bulan_ini' | 'kustom') => {
     setCashFlowDatePreset(preset);
@@ -215,8 +253,8 @@ export const FinancesView: React.FC = () => {
         return sum + Math.round(m.stock * costPerPcs);
       }, 0);
 
-    // 1. Kas & Setara Kas murni dari Penjualan Obat + Pemasukan - Pengeluaran
-    const saldoKas = Math.max(0, totalSalesNeraca + totalPemasukanLain - totalExpenses);
+    // 1. Kas & Setara Kas murni dari Modal Awal + Penjualan Obat + Pemasukan - Pengeluaran
+    const saldoKas = Math.max(0, baseInitialModal + totalSalesNeraca + totalPemasukanLain - totalExpenses);
     const totalAsetLancar = saldoKas + totalValuasiStok;
     const totalAset = totalAsetLancar;
 
@@ -483,6 +521,8 @@ export const FinancesView: React.FC = () => {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [cashFlows, cashFlowSearch, cashFlowTypeFilter, cashFlowDatePreset, cashFlowStartDate, cashFlowEndDate]);
 
+  const paginatedArusKas = filteredArusKas.slice((arusKasPage - 1) * ITEMS_PER_PAGE, arusKasPage * ITEMS_PER_PAGE);
+
   const cashFlowSummary = useMemo(() => {
     const totalPemasukan = filteredArusKas
       .filter(cf => cf.type === 'Pemasukan')
@@ -511,6 +551,34 @@ export const FinancesView: React.FC = () => {
     setCashFlowNote('');
     setCashFlowCategory('Operasional');
   };
+
+  // --- MODAL PAGINATION COMPUTATIONS ---
+  // 1. Kas (POS Transactions)
+  const kasPosTransactions = useMemo(() => transactions.filter(t => t.status === 'Selesai' && getTrxObatTotal(t) > 0), [transactions]);
+  const paginatedKasPosTransactions = kasPosTransactions.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
+
+  // 2. Kas (Cash Flows)
+  const paginatedCashFlows = cashFlows.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
+
+  // 3. Persediaan Obat
+  const persediaanObat = useMemo(() => medicines.filter(m => (m.itemType || 'obat') === 'obat'), [medicines]);
+  const paginatedPersediaanObat = persediaanObat.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
+
+  // 4. Modal Disetor
+  const modalDisetorList = useMemo(() => cashFlows.filter(cf => cf.type === 'Pemasukan' && (cf.category === 'Suntikan Modal' || cf.note.toLowerCase().includes('modal') || cf.note.toLowerCase().includes('suntikan'))), [cashFlows]);
+  const paginatedModalDisetorList = modalDisetorList.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
+
+  // 5. Penjualan Kotor
+  const paginatedFilteredTransactions = reportData.filteredTransactions.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
+
+  // 6. HPP
+  const paginatedMedicineProfits = reportData.medicineProfits.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
+
+  // 7. Beban Operasional
+  const paginatedExpensesList = reportData.expensesList.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
+
+  // 8. Pemasukan Lainnya
+  const paginatedOtherIncomeList = reportData.otherIncomeList.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
 
   return (
     <div className="space-y-6">
@@ -567,30 +635,6 @@ export const FinancesView: React.FC = () => {
       {/* --- CONTENT 1: NERACA KEUANGAN (BALANCE SHEET) --- */}
       {activeTab === 'neraca' && (
         <div className="space-y-6 animate-fade-in">
-          {/* Status Indicator Bar */}
-          <div className="bg-emerald-50 border border-emerald-200/80 p-4 rounded-2xl shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs">
-                <Scale className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">Status Balance Sheet & Audited Data</span>
-                <span className="text-sm font-extrabold text-slate-800 flex items-center gap-2">
-                  {balanceSheetData.isBalanced ? (
-                    <span className="text-emerald-700 flex items-center gap-1">
-                      ✓ Seimbang Sempurna (Aset = Liabilitas + Ekuitas). Klik baris di bawah untuk melihat rincian & sumber data.
-                    </span>
-                  ) : (
-                    <span className="text-amber-600">Perlu Penyesuaian</span>
-                  )}
-                </span>
-              </div>
-            </div>
-            <div className="text-xs text-emerald-700 font-semibold bg-emerald-100/80 px-3 py-1 rounded-full">
-              Real-time Terhubung POS & Inventaris
-            </div>
-          </div>
-
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* LEFT COLUMN: ASET (ASSETS) */}
             <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden flex flex-col">
@@ -612,15 +656,14 @@ export const FinancesView: React.FC = () => {
                     className="flex justify-between items-center py-3 px-3 rounded-xl border border-transparent hover:border-emerald-200 hover:bg-emerald-50/60 cursor-pointer transition-all group"
                   >
                     <div>
-                      <span className="text-slate-800 text-sm font-bold block group-hover:text-emerald-700 flex items-center gap-1.5">
+                      <span className="text-slate-800 text-sm font-bold block group-hover:text-emerald-700">
                         Kas & Setara Kas
-                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">Rincian & Sumber</span>
                       </span>
-                      <span className="text-xs text-slate-500">Saldo kas riil apotek dari operasional & POS</span>
+                      <span className="text-xs text-slate-500">Saldo kas dari operasional & POS</span>
                     </div>
                     <div className="text-right">
                       <span className="font-extrabold text-slate-900 block">{formatRupiah(balanceSheetData.saldoKas)}</span>
-                      <span className="text-[11px] text-emerald-600 font-semibold group-hover:underline">Lihat Detail ➔</span>
+                      <span className="text-[11px] text-emerald-600 font-semibold group-hover:underline">Lihat Rincian ➔</span>
                     </div>
                   </div>
 
@@ -629,15 +672,14 @@ export const FinancesView: React.FC = () => {
                     className="flex justify-between items-center py-3 px-3 rounded-xl border border-transparent hover:border-emerald-200 hover:bg-emerald-50/60 cursor-pointer transition-all group mt-2"
                   >
                     <div>
-                      <span className="text-slate-800 text-sm font-bold block group-hover:text-emerald-700 flex items-center gap-1.5">
+                      <span className="text-slate-800 text-sm font-bold block group-hover:text-emerald-700">
                         Persediaan Obat (Inventory)
-                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">Rincian & Sumber</span>
                       </span>
-                      <span className="text-xs text-slate-500">Nilai aset modal stok obat di etalase/gudang</span>
+                      <span className="text-xs text-slate-500">Nilai stok obat</span>
                     </div>
                     <div className="text-right">
                       <span className="font-extrabold text-slate-900 block">{formatRupiah(balanceSheetData.totalValuasiStok)}</span>
-                      <span className="text-[11px] text-emerald-600 font-semibold group-hover:underline">Lihat Detail ➔</span>
+                      <span className="text-[11px] text-emerald-600 font-semibold group-hover:underline">Lihat Rincian ➔</span>
                     </div>
                   </div>
                 </div>
@@ -672,15 +714,14 @@ export const FinancesView: React.FC = () => {
                     className="flex justify-between items-center py-3 px-3 rounded-xl border border-transparent hover:border-indigo-200 hover:bg-indigo-50/60 cursor-pointer transition-all group"
                   >
                     <div>
-                      <span className="text-slate-800 text-sm font-bold block group-hover:text-indigo-700 flex items-center gap-1.5">
-                        Modal Awal / Disetor
-                        <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full font-semibold">Rincian & Sumber</span>
+                      <span className="text-slate-800 text-sm font-bold block group-hover:text-indigo-700">
+                        Modal Disetor
                       </span>
-                      <span className="text-xs text-slate-500">Modal disetor pemilik & suntikan kas</span>
+                      <span className="text-xs text-slate-500">Modal awal pemilik</span>
                     </div>
                     <div className="text-right">
                       <span className="font-extrabold text-slate-900 block">{formatRupiah(balanceSheetData.modalDisetor)}</span>
-                      <span className="text-[11px] text-indigo-600 font-semibold group-hover:underline">Lihat Detail ➔</span>
+                      <span className="text-[11px] text-indigo-600 font-semibold group-hover:underline">Lihat Rincian ➔</span>
                     </div>
                   </div>
 
@@ -689,17 +730,16 @@ export const FinancesView: React.FC = () => {
                     className="flex justify-between items-center py-3 px-3 rounded-xl border border-transparent hover:border-indigo-200 hover:bg-indigo-50/60 cursor-pointer transition-all group mt-2"
                   >
                     <div>
-                      <span className="text-slate-800 text-sm font-bold block group-hover:text-indigo-700 flex items-center gap-1.5">
-                        Laba Ditahan / Berjalan
-                        <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full font-semibold">Rincian & Sumber</span>
+                      <span className="text-slate-800 text-sm font-bold block group-hover:text-indigo-700">
+                        Laba Ditahan
                       </span>
-                      <span className="text-xs text-slate-500">Hasil kumulatif laba bersih apotek</span>
+                      <span className="text-xs text-slate-500">Hasil kumulatif laba bersih</span>
                     </div>
                     <div className="text-right">
                       <span className={`font-extrabold block ${balanceSheetData.labaDitahan >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                         {formatRupiah(balanceSheetData.labaDitahan)}
                       </span>
-                      <span className="text-[11px] text-indigo-600 font-semibold group-hover:underline">Lihat Detail ➔</span>
+                      <span className="text-[11px] text-indigo-600 font-semibold group-hover:underline">Lihat Rincian ➔</span>
                     </div>
                   </div>
                   <div className="flex justify-between items-center pt-3 mt-2 px-2 border-t border-slate-100">
@@ -767,13 +807,6 @@ export const FinancesView: React.FC = () => {
               <div className="text-xs font-medium text-slate-500 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
                 <span className="font-bold text-slate-800">{reportData.filteredTransactions.length}</span> Trx POS • <span className="font-bold text-slate-800">{reportData.filteredCashFlows.length}</span> Arus Kas
               </div>
-              <button
-                onClick={() => setIsPrintModalOpen(true)}
-                className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-sm shrink-0"
-              >
-                <Printer className="w-4 h-4" />
-                Cetak / Export Laporan
-              </button>
             </div>
           </div>
 
@@ -1266,7 +1299,7 @@ export const FinancesView: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    filteredArusKas.map(cf => (
+                    paginatedArusKas.map(cf => (
                       <tr key={cf.id} className="hover:bg-slate-50 transition-colors">
                         <td className="py-3 px-4 text-slate-700">{formatDateTime(cf.date)}</td>
                         <td className="py-3 px-4">
@@ -1299,6 +1332,14 @@ export const FinancesView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            
+            <PaginationControls
+              currentPage={arusKasPage}
+              totalPages={Math.ceil(filteredArusKas.length / ITEMS_PER_PAGE)}
+              onPageChange={setArusKasPage}
+              totalItems={filteredArusKas.length}
+              itemsPerPage={ITEMS_PER_PAGE}
+            />
           </div>
         </div>
       )}
@@ -1450,13 +1491,13 @@ export const FinancesView: React.FC = () => {
               <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4">
                 <h4 className="font-extrabold text-emerald-900 text-sm mb-1">Formula & Metode Perhitungan:</h4>
                 <p className="text-xs text-emerald-800 font-mono bg-emerald-100/80 p-2 rounded-xl mb-2">
-                  {selectedBalanceDetail === 'kas' && 'Saldo Kas = (Total Penjualan Obat POS Selesai) + (Pemasukan Arus Kas Lainnya) - (Pengeluaran Arus Kas Lainnya)'}
+                  {selectedBalanceDetail === 'kas' && 'Saldo Kas = (Modal Awal) + (Total Penjualan Obat POS Selesai) + (Pemasukan Arus Kas Lainnya) - (Pengeluaran Arus Kas Lainnya)'}
                   {selectedBalanceDetail === 'persediaan' && 'Valuasi Persediaan = Sum(Stok Fisik Obat Saja x Harga Beli / HPP per unit)'}
                   {selectedBalanceDetail === 'modal' && 'Modal Disetor = Modal Awal Standar (Rp 50.000.000) + Akumulasi Suntikan Modal via Log Arus Kas'}
                   {selectedBalanceDetail === 'laba' && 'Laba Ditahan = Total Aset (Kas + Stok Obat) - Total Liabilitas (Utang) - Total Modal Disetor'}
                 </p>
                 <p className="text-xs text-emerald-900 leading-relaxed">
-                  {selectedBalanceDetail === 'kas' && 'Hanya transaksi penjualan obat apotek yang berstatus "Selesai" yang masuk ke kas neraca (penjualan non-obat dikecualikan dari neraca keuangan), ditambah pemasukan kas operasional dan dikurangi pengeluaran operasional.'}
+                  {selectedBalanceDetail === 'kas' && 'Saldo kas dihitung dari Modal Awal Apotek ditambah seluruh transaksi penjualan obat apotek berstatus "Selesai", ditambah pemasukan kas operasional lainnya, dan dikurangi seluruh pengeluaran operasional.'}
                   {selectedBalanceDetail === 'persediaan' && 'Nilai persediaan neraca murni dihitung berdasarkan harga beli (HPP) dikalikan dengan stok fisik aktif sediaan obat (barang non-obat dikecualikan dari neraca keuangan).'}
                   {selectedBalanceDetail === 'modal' && 'Modal disetor mencakup modal pendirian awal apotek serta penambahan modal dari catatan arus kas bertipe pemasukan dengan kategori "Suntikan Modal".'}
                   {selectedBalanceDetail === 'laba' && 'Laba ditahan atau berjalan merepresentasikan akumulasi surplus kekayaan bersih apotek yang diperoleh dari selisih seluruh aset dikurangi kewajiban dan modal.'}
@@ -1468,11 +1509,11 @@ export const FinancesView: React.FC = () => {
                 <div className="space-y-4">
                   <div>
                     <h5 className="font-bold text-slate-800 text-sm mb-2">
-                      1. Sumber dari Penjualan POS Obat Selesai ({transactions.filter(t => t.status === 'Selesai' && getTrxObatTotal(t) > 0).length} transaksi - non-obat dikecualikan)
+                      1. Sumber dari Penjualan POS Obat Selesai ({kasPosTransactions.length} transaksi - non-obat dikecualikan)
                     </h5>
-                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                    <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col">
                       <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-600 sticky top-0 border-b border-slate-200">
+                        <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                           <tr>
                             <th className="py-2 px-3 font-bold">No. Transaksi / Waktu</th>
                             <th className="py-2 px-3 font-bold">Pelanggan</th>
@@ -1480,26 +1521,37 @@ export const FinancesView: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {transactions.filter(t => t.status === 'Selesai' && getTrxObatTotal(t) > 0).map(t => {
-                            const obatTotal = getTrxObatTotal(t);
-                            return (
-                              <tr key={t.id} className="hover:bg-slate-50">
-                                <td className="py-2 px-3 font-medium text-slate-700">{t.id} - {formatDateTime(t.date)}</td>
-                                <td className="py-2 px-3 text-slate-600">{t.customerName || 'Umum'}</td>
-                                <td className="py-2 px-3 text-right font-extrabold text-emerald-600">+{formatRupiah(obatTotal)}</td>
-                              </tr>
-                            );
-                          })}
+                          {paginatedKasPosTransactions.length === 0 ? (
+                            <tr><td colSpan={3} className="py-4 text-center text-slate-400">Tidak ada transaksi.</td></tr>
+                          ) : (
+                            paginatedKasPosTransactions.map(t => {
+                              const obatTotal = getTrxObatTotal(t);
+                              return (
+                                <tr key={t.id} className="hover:bg-slate-50">
+                                  <td className="py-2 px-3 font-medium text-slate-700">{t.id} - {formatDateTime(t.date)}</td>
+                                  <td className="py-2 px-3 text-slate-600">{t.customerName || 'Umum'}</td>
+                                  <td className="py-2 px-3 text-right font-extrabold text-emerald-600">+{formatRupiah(obatTotal)}</td>
+                                </tr>
+                              );
+                            })
+                          )}
                         </tbody>
                       </table>
+                      <PaginationControls
+                        currentPage={modalPage}
+                        totalPages={Math.ceil(kasPosTransactions.length / ITEMS_PER_PAGE)}
+                        onPageChange={setModalPage}
+                        totalItems={kasPosTransactions.length}
+                        itemsPerPage={ITEMS_PER_PAGE}
+                      />
                     </div>
                   </div>
 
                   <div>
                     <h5 className="font-bold text-slate-800 text-sm mb-2">2. Sumber dari Log Arus Kas ({cashFlows.length} catatan)</h5>
-                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                    <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col mt-4">
                       <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-600 sticky top-0 border-b border-slate-200">
+                        <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                           <tr>
                             <th className="py-2 px-3 font-bold">Tanggal</th>
                             <th className="py-2 px-3 font-bold">Tipe & Kategori</th>
@@ -1508,22 +1560,33 @@ export const FinancesView: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {cashFlows.map(cf => (
-                            <tr key={cf.id} className="hover:bg-slate-50">
-                              <td className="py-2 px-3 text-slate-700">{formatDate(cf.date)}</td>
-                              <td className="py-2 px-3">
-                                <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${cf.type === 'Pemasukan' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                                  {cf.type} ({cf.category})
-                                </span>
-                              </td>
-                              <td className="py-2 px-3 text-slate-600">{cf.note}</td>
-                              <td className={`py-2 px-3 text-right font-extrabold ${cf.type === 'Pemasukan' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                {cf.type === 'Pemasukan' ? '+' : '-'} {formatRupiah(cf.amount)}
-                              </td>
-                            </tr>
-                          ))}
+                          {paginatedCashFlows.length === 0 ? (
+                            <tr><td colSpan={4} className="py-4 text-center text-slate-400">Tidak ada catatan arus kas.</td></tr>
+                          ) : (
+                            paginatedCashFlows.map(cf => (
+                              <tr key={cf.id} className="hover:bg-slate-50">
+                                <td className="py-2 px-3 text-slate-700">{formatDate(cf.date)}</td>
+                                <td className="py-2 px-3">
+                                  <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${cf.type === 'Pemasukan' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                    {cf.type} ({cf.category})
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3 text-slate-600">{cf.note}</td>
+                                <td className={`py-2 px-3 text-right font-extrabold ${cf.type === 'Pemasukan' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                  {cf.type === 'Pemasukan' ? '+' : '-'} {formatRupiah(cf.amount)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
                         </tbody>
                       </table>
+                      <PaginationControls
+                        currentPage={modalPage}
+                        totalPages={Math.ceil(cashFlows.length / ITEMS_PER_PAGE)}
+                        onPageChange={setModalPage}
+                        totalItems={cashFlows.length}
+                        itemsPerPage={ITEMS_PER_PAGE}
+                      />
                     </div>
                   </div>
                 </div>
@@ -1532,11 +1595,11 @@ export const FinancesView: React.FC = () => {
               {selectedBalanceDetail === 'persediaan' && (
                 <div>
                   <h5 className="font-bold text-slate-800 text-sm mb-2">
-                    Daftar Sediaan Obat & Valuasi Stok ({medicines.filter(m => (m.itemType || 'obat') === 'obat').length} Item - non-obat dikecualikan)
+                    Daftar Sediaan Obat & Valuasi Stok ({persediaanObat.length} Item - non-obat dikecualikan)
                   </h5>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden max-h-80 overflow-y-auto">
+                  <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col">
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-600 sticky top-0 border-b border-slate-200">
+                      <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                         <tr>
                           <th className="py-2.5 px-3 font-bold">Nama Obat</th>
                           <th className="py-2.5 px-3 font-bold">Kategori</th>
@@ -1546,22 +1609,33 @@ export const FinancesView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {medicines.filter(m => (m.itemType || 'obat') === 'obat').map(m => {
-                          const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
-                          const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
-                          const val = Math.round(m.stock * costPerPcs);
-                          return (
-                            <tr key={m.id} className="hover:bg-slate-50">
-                              <td className="py-2.5 px-3 font-bold text-slate-800">{m.name}</td>
-                              <td className="py-2.5 px-3 text-slate-600">{m.category}</td>
-                              <td className="py-2.5 px-3 text-center font-semibold text-slate-700">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</td>
-                              <td className="py-2.5 px-3 text-right text-slate-600">{formatRupiah(m.purchasePrice)}</td>
-                              <td className="py-2.5 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(val)}</td>
-                            </tr>
-                          );
-                        })}
+                        {paginatedPersediaanObat.length === 0 ? (
+                          <tr><td colSpan={5} className="py-6 text-center text-slate-400">Tidak ada obat.</td></tr>
+                        ) : (
+                          paginatedPersediaanObat.map(m => {
+                            const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
+                            const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
+                            const val = Math.round(m.stock * costPerPcs);
+                            return (
+                              <tr key={m.id} className="hover:bg-slate-50">
+                                <td className="py-2.5 px-3 font-bold text-slate-800">{m.name}</td>
+                                <td className="py-2.5 px-3 text-slate-600">{m.category}</td>
+                                <td className="py-2.5 px-3 text-center font-semibold text-slate-700">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</td>
+                                <td className="py-2.5 px-3 text-right text-slate-600">{formatRupiah(m.purchasePrice)}</td>
+                                <td className="py-2.5 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(val)}</td>
+                              </tr>
+                            );
+                          })
+                        )}
                       </tbody>
                     </table>
+                    <PaginationControls
+                      currentPage={modalPage}
+                      totalPages={Math.ceil(persediaanObat.length / ITEMS_PER_PAGE)}
+                      onPageChange={setModalPage}
+                      totalItems={persediaanObat.length}
+                      itemsPerPage={ITEMS_PER_PAGE}
+                    />
                   </div>
                 </div>
               )}
@@ -1634,7 +1708,7 @@ export const FinancesView: React.FC = () => {
                         Catat Suntikan Modal Baru
                       </button>
                     </div>
-                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                           <tr>
@@ -1644,12 +1718,12 @@ export const FinancesView: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {cashFlows.filter(cf => cf.type === 'Pemasukan' && (cf.category === 'Suntikan Modal' || cf.note.toLowerCase().includes('modal') || cf.note.toLowerCase().includes('suntikan'))).length === 0 ? (
+                          {paginatedModalDisetorList.length === 0 ? (
                             <tr>
                               <td colSpan={3} className="py-6 text-center text-slate-400">Tidak ada suntikan modal tambahan dari arus kas.</td>
                             </tr>
                           ) : (
-                            cashFlows.filter(cf => cf.type === 'Pemasukan' && (cf.category === 'Suntikan Modal' || cf.note.toLowerCase().includes('modal') || cf.note.toLowerCase().includes('suntikan'))).map(cf => (
+                            paginatedModalDisetorList.map(cf => (
                               <tr key={cf.id} className="hover:bg-slate-50">
                                 <td className="py-2 px-3 text-slate-700">{formatDate(cf.date)}</td>
                                 <td className="py-2 px-3 text-slate-600">{cf.note}</td>
@@ -1659,6 +1733,13 @@ export const FinancesView: React.FC = () => {
                           )}
                         </tbody>
                       </table>
+                      <PaginationControls
+                        currentPage={modalPage}
+                        totalPages={Math.ceil(modalDisetorList.length / ITEMS_PER_PAGE)}
+                        onPageChange={setModalPage}
+                        totalItems={modalDisetorList.length}
+                        itemsPerPage={ITEMS_PER_PAGE}
+                      />
                     </div>
                   </div>
                 </div>
@@ -1766,12 +1847,12 @@ export const FinancesView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {reportData.filteredTransactions.length === 0 ? (
+                        {paginatedFilteredTransactions.length === 0 ? (
                           <tr>
                             <td colSpan={7} className="py-8 text-center text-slate-400">Tidak ada transaksi penjualan pada periode ini.</td>
                           </tr>
                         ) : (
-                          reportData.filteredTransactions.map(trx => {
+                          paginatedFilteredTransactions.map(trx => {
                             const isExpanded = expandedTrxId === trx.id;
                             return (
                               <React.Fragment key={trx.id}>
@@ -1837,6 +1918,13 @@ export const FinancesView: React.FC = () => {
                         )}
                       </tbody>
                     </table>
+                    <PaginationControls
+                      currentPage={modalPage}
+                      totalPages={Math.ceil(reportData.filteredTransactions.length / ITEMS_PER_PAGE)}
+                      onPageChange={setModalPage}
+                      totalItems={reportData.filteredTransactions.length}
+                      itemsPerPage={ITEMS_PER_PAGE}
+                    />
                   </div>
                 </div>
               )}
@@ -1861,9 +1949,9 @@ export const FinancesView: React.FC = () => {
 
                   <div>
                     <h4 className="font-bold text-slate-800 text-sm mb-2">Laporan Profitabilitas Produk Terjual Periode Ini:</h4>
-                    <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden flex flex-col">
                       <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-700 sticky top-0 border-b border-slate-200">
+                        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                           <tr>
                             <th className="py-2.5 px-3 font-bold">Nama Obat / Alkes</th>
                             <th className="py-2.5 px-3 font-bold text-center">Qty Terjual</th>
@@ -1874,12 +1962,12 @@ export const FinancesView: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {reportData.medicineProfits.length === 0 ? (
+                          {paginatedMedicineProfits.length === 0 ? (
                             <tr>
                               <td colSpan={6} className="py-8 text-center text-slate-400">Tidak ada produk terjual pada periode ini.</td>
                             </tr>
                           ) : (
-                            reportData.medicineProfits.map((med, idx) => {
+                            paginatedMedicineProfits.map((med, idx) => {
                               const marginPct = med.sales > 0 ? (med.profit / med.sales) * 100 : 0;
                               return (
                                 <tr key={med.id || idx} className="hover:bg-slate-50">
@@ -1899,6 +1987,13 @@ export const FinancesView: React.FC = () => {
                           )}
                         </tbody>
                       </table>
+                      <PaginationControls
+                        currentPage={modalPage}
+                        totalPages={Math.ceil(reportData.medicineProfits.length / ITEMS_PER_PAGE)}
+                        onPageChange={setModalPage}
+                        totalItems={reportData.medicineProfits.length}
+                        itemsPerPage={ITEMS_PER_PAGE}
+                      />
                     </div>
                   </div>
                 </div>
@@ -1915,9 +2010,9 @@ export const FinancesView: React.FC = () => {
                     <span className="text-xl font-extrabold text-rose-700">- {formatRupiah(reportData.totalBebanOperasional)}</span>
                   </div>
 
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden flex flex-col">
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-700 sticky top-0 border-b border-slate-200">
+                      <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                         <tr>
                           <th className="py-2.5 px-3 font-bold">Tanggal</th>
                           <th className="py-2.5 px-3 font-bold">Kategori</th>
@@ -1927,12 +2022,12 @@ export const FinancesView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {reportData.expensesList.length === 0 ? (
+                        {paginatedExpensesList.length === 0 ? (
                           <tr>
                             <td colSpan={5} className="py-8 text-center text-slate-400">Tidak ada pengeluaran operasional pada periode ini.</td>
                           </tr>
                         ) : (
-                          reportData.expensesList.map(cf => (
+                          paginatedExpensesList.map(cf => (
                             <tr key={cf.id} className="hover:bg-slate-50">
                               <td className="py-2.5 px-3 text-slate-700 font-medium">{formatDate(cf.date)}</td>
                               <td className="py-2.5 px-3">
@@ -1948,6 +2043,13 @@ export const FinancesView: React.FC = () => {
                         )}
                       </tbody>
                     </table>
+                    <PaginationControls
+                      currentPage={modalPage}
+                      totalPages={Math.ceil(reportData.expensesList.length / ITEMS_PER_PAGE)}
+                      onPageChange={setModalPage}
+                      totalItems={reportData.expensesList.length}
+                      itemsPerPage={ITEMS_PER_PAGE}
+                    />
                   </div>
                 </div>
               )}
@@ -1963,9 +2065,9 @@ export const FinancesView: React.FC = () => {
                     <span className="text-xl font-extrabold text-emerald-700">+ {formatRupiah(reportData.pemasukanLainnya)}</span>
                   </div>
 
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden flex flex-col">
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-700 sticky top-0 border-b border-slate-200">
+                      <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                         <tr>
                           <th className="py-2.5 px-3 font-bold">Tanggal</th>
                           <th className="py-2.5 px-3 font-bold">Kategori</th>
@@ -1975,12 +2077,12 @@ export const FinancesView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {reportData.otherIncomeList.length === 0 ? (
+                        {paginatedOtherIncomeList.length === 0 ? (
                           <tr>
                             <td colSpan={5} className="py-8 text-center text-slate-400">Tidak ada pemasukan non-penjualan pada periode ini.</td>
                           </tr>
                         ) : (
-                          reportData.otherIncomeList.map(cf => (
+                          paginatedOtherIncomeList.map(cf => (
                             <tr key={cf.id} className="hover:bg-slate-50">
                               <td className="py-2.5 px-3 text-slate-700 font-medium">{formatDate(cf.date)}</td>
                               <td className="py-2.5 px-3">
@@ -1996,6 +2098,13 @@ export const FinancesView: React.FC = () => {
                         )}
                       </tbody>
                     </table>
+                    <PaginationControls
+                      currentPage={modalPage}
+                      totalPages={Math.ceil(reportData.otherIncomeList.length / ITEMS_PER_PAGE)}
+                      onPageChange={setModalPage}
+                      totalItems={reportData.otherIncomeList.length}
+                      itemsPerPage={ITEMS_PER_PAGE}
+                    />
                   </div>
                 </div>
               )}
@@ -2064,151 +2173,7 @@ export const FinancesView: React.FC = () => {
       </div>
       )}
 
-      {/* --- PRINT / EXPORT FORMAL STATEMENT MODAL --- */}
-      {isPrintModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-6">
-            <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[95vh] shadow-2xl flex flex-col overflow-hidden border border-slate-100 text-left my-auto animate-fade-in">
-            {/* Action Header */}
-            <div className="p-4 border-b border-slate-200 bg-slate-900 text-white flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <Printer className="w-5 h-5 text-emerald-400" />
-                <span className="font-extrabold text-sm">Pratinjau Cetak Laporan Laba / Rugi Resmi</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => window.print()}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  Cetak Sekarang
-                </button>
-                <button
-                  onClick={() => setIsPrintModalOpen(false)}
-                  className="p-1.5 hover:bg-slate-800 rounded-full text-slate-300"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
 
-            {/* Printable Document Body */}
-            <div className="p-8 overflow-y-auto space-y-6 flex-1 bg-white text-slate-900 font-sans print:p-0">
-              {/* Kop Surat Apotek */}
-              <div className="border-b-2 border-slate-900 pb-4 text-center space-y-1">
-                <h1 className="font-black text-xl uppercase tracking-wider text-slate-900">
-                  {settings.pharmacyName || 'APOTEK SEHAT BERSAMA'}
-                </h1>
-                <p className="text-xs text-slate-600 font-medium">
-                  {settings.address || 'Jl. Kesehatan No. 123, Jakarta Indonesia'}
-                </p>
-                <p className="text-xs text-slate-500">
-                  SIA: {settings.siaNumber || 'SIA-992/2026/DKS'} • APA: {settings.apaName || 'apt. Farmasis Utama, S.Farm'}
-                </p>
-              </div>
-
-              {/* Title */}
-              <div className="text-center space-y-1">
-                <h2 className="font-black text-base text-slate-900 uppercase underline tracking-wide">
-                  LAPORAN LABA / RUGI KOMPREHENSIF
-                </h2>
-                <p className="text-xs font-bold text-slate-600 uppercase">
-                  PERIODE: {reportPeriod === 'hari_ini' ? 'HARI INI' : reportPeriod === 'bulan_ini' ? 'BULAN INI' : reportPeriod === 'tahun_ini' ? 'TAHUN INI' : 'SEMUA PERIODE'}
-                </p>
-                <p className="text-[11px] text-slate-400">Dicetak Pada: {formatDateTime(new Date().toISOString())}</p>
-              </div>
-
-              {/* Statement Table */}
-              <div className="border border-slate-900 rounded-lg overflow-hidden text-xs">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-100 border-b border-slate-900 text-slate-900">
-                    <tr>
-                      <th className="py-2.5 px-4 font-black uppercase">Komponen Keuangan</th>
-                      <th className="py-2.5 px-4 font-black uppercase text-right">Jumlah (Rupiah)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-300">
-                    {/* Pendapatan POS */}
-                    <tr className="bg-white">
-                      <td className="py-2 px-4 font-bold text-slate-900">I. PENDAPATAN OPERASIONAL (Penjualan Kasir POS)</td>
-                      <td className="py-2 px-4 text-right font-bold text-slate-900">{formatRupiah(reportData.totalPenjualan)}</td>
-                    </tr>
-                    {/* HPP */}
-                    <tr className="bg-white">
-                      <td className="py-2 px-4 text-slate-700 pl-8">Harga Pokok Penjualan (HPP Modal Obat)</td>
-                      <td className="py-2 px-4 text-right text-slate-800">({formatRupiah(reportData.totalHPP)})</td>
-                    </tr>
-                    {/* Laba Kotor */}
-                    <tr className="bg-emerald-50/80 font-black">
-                      <td className="py-2.5 px-4 text-emerald-950">LABA KOTOR (GROSS PROFIT)</td>
-                      <td className="py-2.5 px-4 text-right text-emerald-950">{formatRupiah(reportData.labaKotor)}</td>
-                    </tr>
-
-                    {/* Beban Operasional */}
-                    <tr className="bg-white">
-                      <td className="py-2 px-4 font-bold text-slate-900">II. BEBAN OPERASIONAL APOTEK</td>
-                      <td className="py-2 px-4 text-right font-bold text-slate-900">({formatRupiah(reportData.totalBebanOperasional)})</td>
-                    </tr>
-                    {Object.entries(reportData.expensesByCategory).map(([cat, amt]) => (
-                      <tr key={cat} className="bg-white text-slate-600">
-                        <td className="py-1 px-4 pl-8">• Beban {cat}</td>
-                        <td className="py-1 px-4 text-right">({formatRupiah(Number(amt))})</td>
-                      </tr>
-                    ))}
-
-                    {/* Laba Operasional */}
-                    <tr className="bg-slate-100 font-extrabold">
-                      <td className="py-2 px-4 text-slate-900">LABA OPERASIONAL SAHAM (EBIT)</td>
-                      <td className="py-2 px-4 text-right text-slate-900">{formatRupiah(reportData.labaKotor - reportData.totalBebanOperasional)}</td>
-                    </tr>
-
-                    {/* Pendapatan Lain */}
-                    <tr className="bg-white">
-                      <td className="py-2 px-4 font-bold text-slate-900">III. PENDAPATAN LAINNYA (NON-OPERASIONAL)</td>
-                      <td className="py-2 px-4 text-right font-bold text-slate-900">+{formatRupiah(reportData.pemasukanLainnya)}</td>
-                    </tr>
-
-                    {/* LABA BERSIH */}
-                    <tr className="bg-slate-900 text-white font-black text-sm">
-                      <td className="py-3 px-4">LABA BERSIH AKHIR (NET PROFIT)</td>
-                      <td className="py-3 px-4 text-right text-emerald-400">{formatRupiah(reportData.labaBersih)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Ratios Footnote */}
-              <div className="grid grid-cols-2 gap-4 text-[11px] p-3 bg-slate-50 rounded-lg border border-slate-200">
-                <div>
-                  <p className="font-bold text-slate-800">Margin Laba Kotor: <span className="text-emerald-700">{reportData.grossMarginPct.toFixed(1)}%</span></p>
-                  <p className="font-bold text-slate-800">Margin Laba Bersih: <span className="text-emerald-700">{reportData.netMarginPct.toFixed(1)}%</span></p>
-                </div>
-                <div className="text-right">
-                  <p className="font-bold text-slate-800">Total Transaksi POS: {reportData.filteredTransactions.length}</p>
-                  <p className="font-bold text-slate-800">Total Arus Kas: {reportData.filteredCashFlows.length}</p>
-                </div>
-              </div>
-
-              {/* Tanda Tangan */}
-              <div className="pt-8 flex justify-between items-end text-xs text-center">
-                <div className="space-y-12">
-                  <p className="font-bold">Dibuat Oleh (Admin/Kasir),</p>
-                  <p className="border-b border-slate-900 font-extrabold pb-0.5 min-w-[140px] inline-block">
-                    ( ......................................... )
-                  </p>
-                </div>
-                <div className="space-y-12">
-                  <p className="font-bold">Mengetahui (Apoteker Pengelola),</p>
-                  <p className="border-b border-slate-900 font-extrabold pb-0.5 min-w-[140px] inline-block">
-                    {settings.apaName || 'apt. Farmasis Utama, S.Farm'}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      )}
 
       {/* Custom Delete Cash Flow Modal */}
       {deletingCashFlowId && (

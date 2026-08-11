@@ -19,6 +19,9 @@ export type MedicineCategory =
   | 'Jamu & Herbal'
   | 'Alat Kesehatan'
   | 'Suplemen & Vitamin'
+  | 'Barang Umum'
+  | 'Perawatan & Kosmetik'
+  | 'Makanan & Minuman'
   | 'Lainnya';
 
 export interface Medicine {
@@ -186,6 +189,9 @@ export type ActiveTab =
   | 'pos'
   | 'transactions'
   | 'reports'
+  | 'report-pajak-ppn'
+  | 'report-obat'
+  | 'report-non-obat'
   | 'users'
   | 'settings'
   | 'finances';

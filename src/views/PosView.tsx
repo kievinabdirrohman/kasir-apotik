@@ -31,6 +31,8 @@ import {
   Sparkles,
   XCircle,
   Zap,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 
 export interface ScanAlert {
@@ -38,6 +40,12 @@ export interface ScanAlert {
   barcode: string;
   medicine?: Medicine;
   message?: string;
+}
+
+export interface TaxAlert {
+  title: string;
+  message: string;
+  medicine?: Medicine;
 }
 
 export type PrescriptionFormulaMode =
@@ -68,7 +76,16 @@ export const PosView: React.FC = () => {
   // Search & Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [taxStatusFilter, setTaxStatusFilter] = useState<'ppn' | 'non_ppn'>('ppn');
+  const [taxStatusFilter, setTaxStatusFilter] = useState<'all' | 'ppn' | 'non_ppn'>('all');
+
+  // Category list scroll ref and handler
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
+  const scrollCategories = (direction: 'left' | 'right') => {
+    if (categoryScrollRef.current) {
+      const scrollAmount = direction === 'left' ? -220 : 220;
+      categoryScrollRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    }
+  };
 
   // Helper to check if a medicine is subject to PPN 11%
   const isMedicinePpn = (med: Medicine): boolean => {
@@ -108,6 +125,7 @@ export const PosView: React.FC = () => {
   const [barcodeInput, setBarcodeInput] = useState('');
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const [scanAlert, setScanAlert] = useState<ScanAlert | null>(null);
+  const [taxAlert, setTaxAlert] = useState<TaxAlert | null>(null);
   const [recentScanToast, setRecentScanToast] = useState<string | null>(null);
 
   // Mobile view switcher for POS ('catalog' or 'cart')
@@ -140,6 +158,9 @@ export const PosView: React.FC = () => {
     'Jamu & Herbal',
     'Alat Kesehatan',
     'Suplemen & Vitamin',
+    'Barang Umum',
+    'Perawatan & Kosmetik',
+    'Makanan & Minuman',
     'Lainnya',
   ];
 
@@ -210,7 +231,7 @@ export const PosView: React.FC = () => {
           if (item.medicineId === med.id) {
             const nextQty = item.qty + 1;
             const mult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || multiplier);
-            return { ...item, qty: nextQty, subtotal: nextQty * mult * item.price, unitMultiplier: mult };
+            return { ...item, qty: nextQty, subtotal: nextQty * item.price, unitMultiplier: mult };
           }
           return item;
         });
@@ -235,7 +256,7 @@ export const PosView: React.FC = () => {
             unit: med.unit,
             price: med.price,
             qty: 1,
-            subtotal: 1 * multiplier * med.price,
+            subtotal: 1 * med.price,
             isPpn,
             ppnRate: itemPpnRate,
             itemType: med.itemType || 'obat',
@@ -292,11 +313,10 @@ export const PosView: React.FC = () => {
     if (cart.length > 0) {
       const cartIsPpn = cart[0].isPpn !== false;
       if (cartIsPpn !== isPpn) {
-        setScanAlert({
-          type: 'expired',
-          barcode: med.code,
+        setTaxAlert({
+          title: 'PENGGABUNGAN TRANSAKSI DILARANG',
           medicine: med,
-          message: `PENGGABUNGAN TRANSAKSI DILARANG:\n\nTransaksi Obat PPN 11% dan Non-PPN TIDAK BOLEH DIGABUNG DALAM 1 TRANSAKSI!\n\nKeranjang saat ini terisi: ${cartIsPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}\nObat yang dipilih: "${med.name}" (${isPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}).\n\nSilakan selesaikan transaksi saat ini terlebih dahulu atau kosongkan keranjang sebelum memproses barang perpajakan berbeda.`,
+          message: `Transaksi Obat PPN 11% dan Non-PPN TIDAK BOLEH DIGABUNG DALAM 1 TRANSAKSI!\n\nKeranjang saat ini terisi: ${cartIsPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}\nObat yang dipilih: "${med.name}" (${isPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}).\n\nSilakan selesaikan transaksi saat ini terlebih dahulu atau kosongkan keranjang sebelum memproses barang perpajakan berbeda.`,
         });
         return false;
       }
@@ -313,20 +333,18 @@ export const PosView: React.FC = () => {
 
     // Also verify against active taxType
     if (taxType === 'PPN' && !isPpn) {
-      setScanAlert({
-        type: 'expired',
-        barcode: med.code,
+      setTaxAlert({
+        title: 'PENGGABUNGAN TRANSAKSI DILARANG',
         medicine: med,
-        message: `PENGGABUNGAN TRANSAKSI DILARANG:\n\nTransaksi saat ini ditetapkan sebagai Transaksi PPN 11%. Sediaan Obat Non-PPN ("${med.name}") tidak dapat dimasukkan ke Transaksi PPN.`,
+        message: `Transaksi saat ini ditetapkan sebagai Transaksi PPN 11%. Sediaan Obat Non-PPN ("${med.name}") tidak dapat dimasukkan ke Transaksi PPN.`,
       });
       return false;
     }
     if (taxType === 'NON_PPN' && isPpn) {
-      setScanAlert({
-        type: 'expired',
-        barcode: med.code,
+      setTaxAlert({
+        title: 'PENGGABUNGAN TRANSAKSI DILARANG',
         medicine: med,
-        message: `PENGGABUNGAN TRANSAKSI DILARANG:\n\nTransaksi saat ini ditetapkan sebagai Transaksi Non-PPN. Sediaan Obat PPN 11% ("${med.name}") tidak dapat dimasukkan ke Transaksi Non-PPN.`,
+        message: `Transaksi saat ini ditetapkan sebagai Transaksi Non-PPN. Sediaan Obat PPN 11% ("${med.name}") tidak dapat dimasukkan ke Transaksi Non-PPN.`,
       });
       return false;
     }
@@ -341,9 +359,9 @@ export const PosView: React.FC = () => {
       const cartIsPpn = cart[0].isPpn !== false;
       const currentCartType = cartIsPpn ? 'PPN' : 'NON_PPN';
       if (currentCartType !== targetType) {
-        setScanAlert({
-          type: 'expired',
-          message: `PERUBAHAN JENIS TRANSAKSI DILARANG:\n\nKeranjang saat ini terisi ${cartIsPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}. Jenis transaksi perpajakan tidak dapat diubah ke ${targetType === 'PPN' ? 'Transaksi PPN' : 'Non-PPN'} saat keranjang terisi. Silakan kosongkan keranjang terlebih dahulu.`,
+        setTaxAlert({
+          title: 'PERUBAHAN JENIS TRANSAKSI DILARANG',
+          message: `Keranjang saat ini terisi ${cartIsPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}. Jenis transaksi perpajakan tidak dapat diubah ke ${targetType === 'PPN' ? 'Transaksi PPN' : 'Non-PPN'} saat keranjang terisi. Silakan kosongkan keranjang terlebih dahulu.`,
         });
         return;
       }
@@ -352,20 +370,22 @@ export const PosView: React.FC = () => {
     setTaxStatusFilter(targetType === 'PPN' ? 'ppn' : 'non_ppn');
   };
 
-  const handleSwitchTaxFilter = (targetFilter: 'ppn' | 'non_ppn') => {
+  const handleSwitchTaxFilter = (targetFilter: 'all' | 'ppn' | 'non_ppn') => {
     if (cart.length > 0) {
       const cartIsPpn = cart[0].isPpn !== false;
       const currentCartFilter = cartIsPpn ? 'ppn' : 'non_ppn';
-      if (currentCartFilter !== targetFilter) {
-        setScanAlert({
-          type: 'expired',
-          message: `PERPINDAHAN FILTER DILARANG:\n\nKeranjang saat ini terisi ${cartIsPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}. Silakan kosongkan keranjang terlebih dahulu sebelum berpindah filter perpajakan.`,
+      if (targetFilter !== 'all' && currentCartFilter !== targetFilter) {
+        setTaxAlert({
+          title: 'PERPINDAHAN FILTER DILARANG',
+          message: `Keranjang saat ini terisi ${cartIsPpn ? 'Obat PPN 11%' : 'Obat Non-PPN'}. Silakan kosongkan keranjang terlebih dahulu sebelum berpindah filter perpajakan.`,
         });
         return;
       }
     }
     setTaxStatusFilter(targetFilter);
-    setTaxType(targetFilter === 'ppn' ? 'PPN' : 'NON_PPN');
+    if (targetFilter !== 'all') {
+      setTaxType(targetFilter === 'ppn' ? 'PPN' : 'NON_PPN');
+    }
   };
 
   const updateCartQty = (medicineId: string, delta: number) => {
@@ -390,7 +410,7 @@ export const PosView: React.FC = () => {
               });
               return item;
             }
-            return { ...item, qty: newQty, subtotal: newQty * multiplier * item.price, unitMultiplier: multiplier };
+            return { ...item, qty: newQty, subtotal: newQty * item.price, unitMultiplier: multiplier };
           }
           return item;
         })
@@ -422,9 +442,9 @@ export const PosView: React.FC = () => {
             });
             const maxPossibleQty = Math.floor(med.stock / multiplier);
             if (maxPossibleQty <= 0) return item;
-            return { ...item, qty: maxPossibleQty, subtotal: maxPossibleQty * multiplier * item.price, unitMultiplier: multiplier };
+            return { ...item, qty: maxPossibleQty, subtotal: maxPossibleQty * item.price, unitMultiplier: multiplier };
           }
-          return { ...item, qty: targetQty, subtotal: targetQty * multiplier * item.price, unitMultiplier: multiplier };
+          return { ...item, qty: targetQty, subtotal: targetQty * item.price, unitMultiplier: multiplier };
         }
         return item;
       })
@@ -438,6 +458,7 @@ export const PosView: React.FC = () => {
   const clearCart = () => {
     setCart([]);
     setPaymentAmount(0);
+    setTaxStatusFilter('all');
   };
 
   // Calculations (Subtotals & Modal Costs)
@@ -556,6 +577,7 @@ export const PosView: React.FC = () => {
     setPrescriptionNote('');
     setUseCustomPrescriptionSettings(false);
     setPaymentAmount(0);
+    setTaxStatusFilter('all');
   };
 
   // Quick Customer Registration
@@ -587,7 +609,7 @@ export const PosView: React.FC = () => {
     const matchesCategory = categoryFilter === 'all' || m.category === categoryFilter;
 
     const isPpn = isMedicinePpn(m);
-    const matchesTax = taxStatusFilter === 'ppn' ? isPpn : !isPpn;
+    const matchesTax = taxStatusFilter === 'all' ? true : (taxStatusFilter === 'ppn' ? isPpn : !isPpn);
 
     return matchesSearch && matchesCategory && matchesTax;
   });
@@ -661,7 +683,7 @@ export const PosView: React.FC = () => {
       {/* POS Main Layout: Left = Medicine Catalog Grid & Barcode Scanner, Right = Cart & Checkout Panel */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* LEFT 7 COLS: Catalog & Search */}
-        <div className={`lg:col-span-7 space-y-3 ${mobileTab === 'catalog' ? 'block' : 'hidden lg:block'}`}>
+        <div className={`lg:col-span-7 space-y-3 min-w-0 w-full ${mobileTab === 'catalog' ? 'block' : 'hidden lg:block'}`}>
           {/* Dedicated Barcode Scan Fast Input Widget */}
           <div className="bg-slate-900 text-white rounded-2xl p-3.5 shadow-md border border-slate-800 space-y-2">
             <div className="flex items-center gap-2">
@@ -708,7 +730,7 @@ export const PosView: React.FC = () => {
           </div>
 
           {/* Search & Category Filter */}
-          <div className="bg-white rounded-2xl p-3.5 border border-slate-100 shadow-xs space-y-2.5">
+          <div className="bg-white rounded-2xl p-3.5 border border-slate-100 shadow-xs space-y-2.5 min-w-0 w-full overflow-hidden">
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -728,43 +750,79 @@ export const PosView: React.FC = () => {
               />
             </div>
 
-            {/* Horizontal Category Tabs */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] scrollbar-none">
+            {/* Horizontal Category Tabs with Scroll Controls */}
+            <div className="relative flex items-center min-w-0 w-full gap-1">
               <button
-                onClick={() => setCategoryFilter('all')}
-                className={`px-3 py-1 rounded-lg font-bold shrink-0 transition-colors ${
-                  categoryFilter === 'all'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
+                type="button"
+                onClick={() => scrollCategories('left')}
+                className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 shrink-0 transition-colors"
+                title="Geser kategori ke kiri"
               >
-                Semua ({medicines.filter(m => m.isActive).length})
+                <ChevronLeft className="w-4 h-4" />
               </button>
-              {categories.map(cat => (
+
+              <div
+                ref={categoryScrollRef}
+                className="flex items-center gap-1.5 overflow-x-auto py-1 text-[11px] no-scrollbar scroll-smooth min-w-0 w-full touch-pan-x"
+              >
                 <button
-                  key={cat}
-                  onClick={() => setCategoryFilter(cat)}
-                  className={`px-3 py-1 rounded-lg font-medium shrink-0 transition-colors ${
-                    categoryFilter === cat
-                      ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                  type="button"
+                  onClick={() => setCategoryFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg font-bold shrink-0 transition-colors ${
+                    categoryFilter === 'all'
+                      ? 'bg-emerald-600 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  {cat}
+                  Semua ({medicines.filter(m => m.isActive).length})
                 </button>
-              ))}
+                {categories.map(cat => (
+                  <button
+                    type="button"
+                    key={cat}
+                    onClick={() => setCategoryFilter(cat)}
+                    className={`px-3 py-1.5 rounded-lg font-medium shrink-0 transition-colors ${
+                      categoryFilter === cat
+                        ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => scrollCategories('right')}
+                className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 shrink-0 transition-colors"
+                title="Geser kategori ke kanan"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
 
             {/* Filter Status Pajak Obat (PPN vs Non-PPN) */}
-            <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-slate-100 text-[11px] overflow-x-auto">
+            <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-slate-100 text-[11px] overflow-x-auto no-scrollbar">
               <span className="font-extrabold text-slate-700 text-[10.5px] shrink-0 flex items-center gap-1">
                 <Receipt className="w-3.5 h-3.5 text-blue-600" /> Filter Pajak:
               </span>
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
+                  onClick={() => handleSwitchTaxFilter('all')}
+                  className={`px-2 py-0.5 rounded-md font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                    taxStatusFilter === 'all'
+                      ? 'bg-slate-800 text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200'
+                  }`}
+                >
+                  Semua ({medicines.filter(m => m.isActive).length})
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleSwitchTaxFilter('ppn')}
-                  className={`px-2 py-0.5 rounded-md font-bold transition-all flex items-center gap-1 ${
+                  className={`px-2 py-0.5 rounded-md font-bold transition-all flex items-center gap-1 cursor-pointer ${
                     taxStatusFilter === 'ppn'
                       ? 'bg-blue-600 text-white shadow-2xs'
                       : 'bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100'
@@ -776,7 +834,7 @@ export const PosView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleSwitchTaxFilter('non_ppn')}
-                  className={`px-2 py-0.5 rounded-md font-bold transition-all flex items-center gap-1 ${
+                  className={`px-2 py-0.5 rounded-md font-bold transition-all flex items-center gap-1 cursor-pointer ${
                     taxStatusFilter === 'non_ppn'
                       ? 'bg-slate-700 text-white shadow-2xs'
                       : 'bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200'
@@ -1360,13 +1418,6 @@ export const PosView: React.FC = () => {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-slate-700">Nominal Pembayaran (Rp)</label>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentAmount(totalAmount)}
-                    className="text-[10px] text-emerald-700 font-bold hover:underline"
-                  >
-                    Uang Pas ({formatRupiah(totalAmount)})
-                  </button>
                 </div>
 
                 <input
@@ -1396,14 +1447,23 @@ export const PosView: React.FC = () => {
                   </div>
                 )}
 
-                {/* Quick Nominal Chips */}
-                <div className="flex items-center gap-1.5 pt-1 overflow-x-auto text-[10px]">
+                {/* Quick Nominal Chips & Uang Pas Grid */}
+                <div className="grid grid-cols-2 gap-2 pt-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentAmount(totalAmount)}
+                    className="col-span-2 py-2.5 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-xs hover:shadow-sm active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    id="exact-change-btn"
+                  >
+                    <Banknote className="w-4 h-4" /> Uang Pas ({formatRupiah(totalAmount)})
+                  </button>
+
                   {[50000, 100000, 150000, 200000].map(nom => (
                     <button
                       key={nom}
                       type="button"
                       onClick={() => setPaymentAmount(nom)}
-                      className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold text-slate-700 shrink-0"
+                      className="py-2.5 px-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 font-extrabold text-slate-700 text-xs text-center transition-all cursor-pointer hover:shadow-xs active:scale-[0.98]"
                     >
                       {formatRupiah(nom)}
                     </button>
@@ -1691,6 +1751,81 @@ export const PosView: React.FC = () => {
           </div>
         </div>
       </div>
+      )}
+
+      {/* Dedicated Tax Separator Alert Modal */}
+      {taxAlert && (
+        <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-xs overflow-y-auto" id="tax-alert-modal">
+          <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-6">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4 text-slate-800 text-left my-auto animate-in fade-in relative overflow-hidden">
+              {/* Top Accent Line */}
+              <div className="h-2.5 -mx-6 -mt-6 mb-3 bg-blue-600" />
+
+              <div className="flex items-start gap-3.5">
+                <div className="p-3 rounded-2xl shrink-0 bg-blue-50 text-blue-700 border border-blue-200">
+                  <Receipt className="w-7 h-7 text-blue-600" />
+                </div>
+
+                <div className="space-y-1 pr-6">
+                  <span className="text-[10px] font-black tracking-wider uppercase px-2 py-0.5 rounded-md inline-block bg-blue-100 text-blue-800">
+                    ⚠️ VALIDASI REGULASI PAJAK (PPN)
+                  </span>
+                  <h3 className="font-extrabold text-slate-900 text-base leading-tight">
+                    {taxAlert.title}
+                  </h3>
+                </div>
+
+                <button
+                  onClick={() => setTaxAlert(null)}
+                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-slate-800 rounded-lg"
+                  id="close-tax-alert-btn"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 text-xs text-slate-700 leading-relaxed space-y-2.5">
+                <p className="font-medium text-slate-800 whitespace-pre-line">{taxAlert.message}</p>
+
+                {taxAlert.medicine && (
+                  <div className="pt-2.5 border-t border-slate-200 grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="bg-white p-2 rounded-xl border border-slate-200">
+                      <span className="text-slate-400 block font-normal text-[10px]">Nama Barang:</span>
+                      <span className="font-bold text-slate-800">
+                        {taxAlert.medicine.name}
+                      </span>
+                    </div>
+                    <div className="bg-white p-2 rounded-xl border border-slate-200">
+                      <span className="text-slate-400 block font-normal text-[10px]">Status Pajak Barang:</span>
+                      <span className="font-bold text-blue-600">
+                        {isMedicinePpn(taxAlert.medicine) ? 'PPN 11%' : 'Non-PPN'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-2.5 text-blue-900 text-[11px] font-semibold flex items-start gap-2">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <span>Sesuai regulasi, sediaan kena PPN (Faktur Pajak) dan Bebas PPN (Non-PPN) harus dicatat dalam transaksi kasir terpisah demi ketertiban pelaporan pembukuan keuangan & perpajakan apotek.</span>
+                </div>
+              </div>
+
+              <div className="pt-1 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTaxAlert(null);
+                    if (barcodeInputRef.current) barcodeInputRef.current.focus();
+                  }}
+                  className="w-full py-3 rounded-2xl text-white font-black text-xs shadow-md transition-all active:scale-[0.98] bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                  id="confirm-tax-alert-btn"
+                >
+                  Saya Mengerti
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

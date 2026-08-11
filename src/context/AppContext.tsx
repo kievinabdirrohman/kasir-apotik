@@ -157,7 +157,7 @@ function getInitialStorage<T>(key: string, defaultValue: T): T {
 }
 
 // Ensure old sample data in localStorage is wiped once for clean testing
-if (typeof window !== 'undefined' && localStorage.getItem('apotek_clean_init_v6') !== 'true') {
+if (typeof window !== 'undefined' && localStorage.getItem('apotek_clean_init_v7') !== 'true') {
   localStorage.removeItem('apotek_medicines');
   localStorage.removeItem('apotek_customers');
   localStorage.removeItem('apotek_doctors');
@@ -165,7 +165,7 @@ if (typeof window !== 'undefined' && localStorage.getItem('apotek_clean_init_v6'
   localStorage.removeItem('apotek_stock_history');
   localStorage.removeItem('apotek_cash_flows');
   localStorage.removeItem('apotek_settings');
-  localStorage.setItem('apotek_clean_init_v6', 'true');
+  localStorage.setItem('apotek_clean_init_v7', 'true');
 }
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -837,7 +837,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       nonObatCostAmount,
       cashierName: currentUser?.name || 'Kasir',
       cashierUsername: currentUser?.username || 'kasir',
-      items,
+      items: items.map(item => ({
+        ...item,
+        isPpn: finalTaxType === 'PPN' ? (item.isPpn !== false) : false,
+        ppnRate: finalTaxType === 'PPN' ? (item.ppnRate || effectivePpnRate) : 0,
+      })),
       totalAmount: finalTotalAmount,
       paymentMethod,
       paymentAmount,
@@ -1211,7 +1215,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setStockHistory([]);
     setSettings(initialSettings);
     localStorage.clear();
-    localStorage.setItem('apotek_clean_init_v3', 'true');
+    localStorage.setItem('apotek_clean_init_v7', 'true');
   };
 
   return (
