@@ -201,9 +201,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     getInitialStorage('apotek_settings', initialSettings)
   );
 
-  const [medicines, setMedicines] = useState<Medicine[]>(() =>
-    getInitialStorage('apotek_medicines', initialMedicines)
-  );
+  const [medicines, setMedicines] = useState<Medicine[]>(() => {
+    const rawMeds = getInitialStorage<Medicine[]>('apotek_medicines', initialMedicines);
+    return rawMeds.map(med => {
+      if (med.unit === 'Lusin') {
+        return {
+          ...med,
+          unitMultiplier: 12,
+        };
+      }
+      return med;
+    });
+  });
 
   const [customers, setCustomers] = useState<Customer[]>(() =>
     getInitialStorage('apotek_customers', initialCustomers)
@@ -322,8 +331,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         prevStock: 0,
         newStock: medData.stock,
         date: getWIBDateTimeString(),
-        note: 'Stok awal obat baru',
+        note: `Stok awal ${newMed.itemType === 'non_obat' ? 'barang non-obat' : 'obat'} baru`,
         user: currentUser?.name || 'Sistem',
+        taxType: (newMed.isPpnIncluded ?? true) && (newMed.ppnRate ?? 11) > 0 ? 'PPN' : 'NON_PPN',
+        purchasePrice: newMed.purchasePrice,
+        sellingPrice: newMed.price,
+        marginPct: newMed.marginPct,
+        bhpAmount: newMed.bhpAmount,
+        itemType: newMed.itemType || 'obat',
       };
       setStockHistory(prev => [historyItem, ...prev]);
     }
@@ -364,6 +379,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     details?: {
       taxType?: 'PPN' | 'NON_PPN';
       purchasePrice?: number;
+      bhpAmount?: number;
       sellingPrice?: number;
       ppnAmount?: number;
       marginPct?: number;
@@ -378,14 +394,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const updateData: Partial<Medicine> = { stock: newStock };
     if (details?.updateMedicineMaster) {
-      if (details.purchasePrice !== undefined && details.purchasePrice > 0) updateData.purchasePrice = details.purchasePrice;
+      if (details.purchasePrice !== undefined && details.purchasePrice >= 0) updateData.purchasePrice = details.purchasePrice;
+      if (details.bhpAmount !== undefined && details.bhpAmount >= 0) updateData.bhpAmount = details.bhpAmount;
+      if (details.marginPct !== undefined) updateData.marginPct = details.marginPct;
       if (details.sellingPrice !== undefined && details.sellingPrice > 0) updateData.price = details.sellingPrice;
       if (details.taxType) {
-        if (details.taxType === 'PPN') {
-          updateData.isPpnIncluded = true;
-          updateData.ppnRate = 11;
+        const isPpn = details.taxType === 'PPN';
+        updateData.isPpnIncluded = isPpn;
+        updateData.ppnRate = isPpn ? 11 : 0;
+
+        const purchase = details.purchasePrice ?? target.purchasePrice ?? 0;
+        const sell = details.sellingPrice ?? target.price ?? 0;
+
+        if (isPpn) {
+          updateData.purchasePriceIncPpn = purchase;
+          updateData.purchasePriceNonPpn = Math.round(purchase / 1.11);
+          updateData.priceIncPpn = sell;
+          updateData.priceNonPpn = Math.round(sell / 1.11);
         } else {
-          updateData.isPpnIncluded = false;
+          updateData.purchasePriceNonPpn = purchase;
+          updateData.purchasePriceIncPpn = Math.round(purchase * 1.11);
+          updateData.priceNonPpn = sell;
+          updateData.priceIncPpn = Math.round(sell * 1.11);
         }
       }
     }
@@ -409,6 +439,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       sellingPrice: details?.sellingPrice,
       ppnAmount: details?.ppnAmount,
       marginPct: details?.marginPct,
+      itemType: target.itemType || 'obat',
     };
 
     setStockHistory(prev => [historyItem, ...prev]);
@@ -504,6 +535,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       note: string;
       taxType?: 'PPN' | 'NON_PPN';
       purchasePrice?: number;
+      bhpAmount?: number;
       sellingPrice?: number;
       ppnAmount?: number;
       marginPct?: number;
@@ -553,6 +585,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           sellingPrice: it.sellingPrice,
           ppnAmount: it.ppnAmount,
           marginPct: it.marginPct,
+          itemType: target.itemType || 'obat',
         });
       }
     });
@@ -563,14 +596,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const { totalAmount, lastItem } = addMap.get(m.id)!;
           const newMed = { ...m, stock: m.stock + totalAmount };
           if (lastItem?.updateMedicineMaster) {
-            if (lastItem.purchasePrice !== undefined && lastItem.purchasePrice > 0) {
+            if (lastItem.purchasePrice !== undefined && lastItem.purchasePrice >= 0) {
               newMed.purchasePrice = lastItem.purchasePrice;
+            }
+            if (lastItem.bhpAmount !== undefined && lastItem.bhpAmount >= 0) {
+              newMed.bhpAmount = lastItem.bhpAmount;
+            }
+            if (lastItem.marginPct !== undefined) {
+              newMed.marginPct = lastItem.marginPct;
             }
             if (lastItem.sellingPrice !== undefined && lastItem.sellingPrice > 0) {
               newMed.price = lastItem.sellingPrice;
             }
             if (lastItem.taxType) {
-              newMed.isPpnIncluded = lastItem.taxType === 'PPN';
+              const isPpn = lastItem.taxType === 'PPN';
+              newMed.isPpnIncluded = isPpn;
+              newMed.ppnRate = isPpn ? 11 : 0;
+
+              const purchase = lastItem.purchasePrice ?? m.purchasePrice ?? 0;
+              const sell = lastItem.sellingPrice ?? m.price ?? 0;
+
+              if (isPpn) {
+                newMed.purchasePriceIncPpn = purchase;
+                newMed.purchasePriceNonPpn = Math.round(purchase / 1.11);
+                newMed.priceIncPpn = sell;
+                newMed.priceNonPpn = Math.round(sell / 1.11);
+              } else {
+                newMed.purchasePriceNonPpn = purchase;
+                newMed.purchasePriceIncPpn = Math.round(purchase * 1.11);
+                newMed.priceNonPpn = sell;
+                newMed.priceIncPpn = Math.round(sell * 1.11);
+              }
             }
           }
           return newMed;
@@ -732,12 +788,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       doctorObj = doctors.find(d => d.id === doctorId);
     }
 
-    // Calculate total HPP / Modal Obat
-    const costAmount = items.reduce((sum, item) => {
+    // Calculate breakdown of HPP & Omset for Obat vs Non-Obat
+    let obatTotalAmount = 0;
+    let nonObatTotalAmount = 0;
+    let obatCostAmount = 0;
+    let nonObatCostAmount = 0;
+
+    items.forEach(item => {
       const med = medicines.find(m => m.id === item.medicineId);
-      const purchasePrice = med?.purchasePrice || Math.round(item.price * 0.7);
-      return sum + purchasePrice * item.qty;
-    }, 0);
+      const itType = item.itemType || med?.itemType || 'obat';
+      const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
+      const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
+      const purchasePrice = item.purchasePrice ?? med?.purchasePrice ?? Math.round(item.price * 0.75);
+
+      const costPerPcs = masterMult > 1 ? purchasePrice / masterMult : purchasePrice;
+      const qtyPcs = item.qty * itemMult;
+      const totalItemCost = Math.round(costPerPcs * qtyPcs);
+
+      if (itType === 'non_obat') {
+        nonObatTotalAmount += item.subtotal;
+        nonObatCostAmount += totalItemCost;
+      } else {
+        obatTotalAmount += item.subtotal;
+        obatCostAmount += totalItemCost;
+      }
+    });
+
+    const costAmount = obatCostAmount + nonObatCostAmount;
 
     const nowFormatted = getWIBDateTimeString();
 
@@ -754,6 +831,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       prescriptionMarkupAmount: finalMarkupAmount,
       prescriptionRacikanFee: finalRacikanFee,
       costAmount,
+      obatTotalAmount,
+      nonObatTotalAmount,
+      obatCostAmount,
+      nonObatCostAmount,
       cashierName: currentUser?.name || 'Kasir',
       cashierUsername: currentUser?.username || 'kasir',
       items,
@@ -779,8 +860,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     items.forEach(item => {
       const med = medicines.find(m => m.id === item.medicineId);
       if (med) {
+        const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || (med.unit === 'Lusin' ? 12 : 1));
+        const qtyToDeduct = item.qty * multiplier;
         const prevStock = med.stock;
-        const newStock = Math.max(0, prevStock - item.qty);
+        const newStock = Math.max(0, prevStock - qtyToDeduct);
 
         newHistories.push({
           id: `sh-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${med.id}`,
@@ -788,12 +871,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           medicineCode: med.code,
           medicineName: med.name,
           type: 'keluar',
-          amount: item.qty,
+          amount: qtyToDeduct,
           prevStock,
           newStock,
           date: nowFormatted,
-          note: `Penjualan ${trxNo}`,
+          note: `Penjualan ${trxNo} (${item.qty} ${item.unit}${multiplier > 1 ? ` = ${qtyToDeduct} pcs` : ''})`,
           user: currentUser?.name || 'Kasir',
+          itemType: item.itemType || med.itemType || 'obat',
         });
       }
     });
@@ -802,7 +886,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return prevMeds.map(med => {
         const item = items.find(it => it.medicineId === med.id);
         if (!item) return med;
-        return { ...med, stock: Math.max(0, med.stock - item.qty) };
+        const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || (med.unit === 'Lusin' ? 12 : 1));
+        const qtyToDeduct = item.qty * multiplier;
+        return { ...med, stock: Math.max(0, med.stock - qtyToDeduct) };
       });
     });
 

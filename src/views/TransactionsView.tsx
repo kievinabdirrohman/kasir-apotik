@@ -954,7 +954,7 @@ export const TransactionsView: React.FC = () => {
                                 {formatRupiah(it.price)}
                               </td>
                               <td className="py-2.5 px-3 text-center font-bold text-slate-900">
-                                {it.qty} {it.unit}
+                                {it.qty} {it.unit}{(it.unit === 'Lusin' || (it.unitMultiplier && it.unitMultiplier > 1)) ? ` (${it.qty * (it.unit === 'Lusin' ? 12 : (it.unitMultiplier || 1))} pcs)` : ''}
                               </td>
                               <td className="py-2.5 px-3 text-right font-extrabold text-emerald-700">
                                 {formatRupiah(it.subtotal)}
@@ -968,9 +968,13 @@ export const TransactionsView: React.FC = () => {
                 </div>
 
                 {/* 4. Total Summary & Margin (Admin Audit) */}
-                <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200 space-y-1">
+                <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200 space-y-1.5">
+                  <div className="flex justify-between items-center text-xs text-emerald-900 font-semibold border-b border-emerald-200/80 pb-1">
+                    <span>Subtotal Sediaan ({selectedTrxDetail.items.reduce((sum, i) => sum + i.qty, 0)} {selectedTrxDetail.items.length === 1 ? selectedTrxDetail.items[0].unit : 'item'}):</span>
+                    <span className="font-bold">{formatRupiah(selectedTrxDetail.items.reduce((sum, i) => sum + i.subtotal, 0))}</span>
+                  </div>
                   <div className="flex justify-between items-center font-extrabold text-emerald-950 text-sm">
-                    <span>TOTAL TOTAL DIBAYAR:</span>
+                    <span>TOTAL DIBAYAR:</span>
                     <span className="text-base text-emerald-800">{formatRupiah(selectedTrxDetail.totalAmount)}</span>
                   </div>
                   {selectedTrxDetail.costAmount && selectedTrxDetail.costAmount > 0 && currentUser.role === 'admin' && (

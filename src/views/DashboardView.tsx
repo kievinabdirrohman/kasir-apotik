@@ -19,6 +19,7 @@ import {
   getWIBDateString,
   getDaysUntilExpired,
   formatDate,
+  formatStockDisplay,
 } from '../utils/formatters';
 import {
   TrendingUp,
@@ -924,7 +925,7 @@ export const DashboardView: React.FC = () => {
                                 : 'bg-slate-100 text-slate-800'
                             }`}
                           >
-                            {med.stock} {med.unit}
+                            {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
                           </span>
                         </td>
                         <td className="py-2.5 px-3">

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { formatDateTime, formatRupiah, getWIBDateString } from '../utils/formatters';
+import { formatDateTime, formatRupiah, getWIBDateString, formatStockDisplay } from '../utils/formatters';
 import { MedicineCategory, StockHistory } from '../types';
 import {
   PackagePlus,
@@ -28,6 +28,8 @@ import {
   DollarSign,
   Info,
   Receipt,
+  ShoppingBag,
+  X,
 } from 'lucide-react';
 
 interface BulkRestockItem {
@@ -37,6 +39,8 @@ interface BulkRestockItem {
   note: string;
   taxType: 'PPN' | 'NON_PPN';
   purchasePrice: number; // HPP Beli per unit
+  bhpAmount: number;     // Bahan Habis Pakai per unit
+  marginPct: number;     // Persentase Margin (%)
   sellingPrice: number;  // Harga Jual per unit
   updateMedicineMaster: boolean; // Flag to update master catalog
 }
@@ -47,15 +51,48 @@ interface BulkOpnameState {
 }
 
 export const StockInView: React.FC = () => {
-  const { medicines, addStock, adjustStock, bulkAdjustStock, bulkAddStock, stockHistory, currentUser } = useApp();
+  const { medicines, addMedicine, addStock, adjustStock, bulkAdjustStock, bulkAddStock, stockHistory, currentUser } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'masuk' | 'penyesuaian'>('masuk');
+  const [restockItemType, setRestockItemType] = useState<'obat' | 'non_obat'>('obat');
 
-  // Sub-tabs for Form vs Log
-  const [restockTab, setRestockTab] = useState<'form' | 'log'>('form');
+  // Modal State for Tambah Item Baru
+  const [isNewItemModalOpen, setIsNewItemModalOpen] = useState(false);
+  const [newItemType, setNewItemType] = useState<'obat' | 'non_obat'>('obat');
+  const [newItemCode, setNewItemCode] = useState('');
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemCategory, setNewItemCategory] = useState<MedicineCategory>('Obat Bebas');
+  const [newItemUnit, setNewItemUnit] = useState('Strip');
+  const [newItemStock, setNewItemStock] = useState<number>(10);
+  const [newItemMinStock, setNewItemMinStock] = useState<number>(10);
+  const [newItemExpiredDate, setNewItemExpiredDate] = useState('');
+  const [newItemLocation, setNewItemLocation] = useState('Rak A1');
+  const [newItemPurchasePrice, setNewItemPurchasePrice] = useState<number>(10000);
+  const [newItemBhpAmount, setNewItemBhpAmount] = useState<number>(0);
+  const [newItemMarginPct, setNewItemMarginPct] = useState<number>(20);
+  const [newItemSellingPrice, setNewItemSellingPrice] = useState<number>(12000);
+  const [newItemIsPpn, setNewItemIsPpn] = useState(true);
+
+  // Modal State for Input Stok Masuk (Dialog Form)
+  const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
+  const [modalItemType, setModalItemType] = useState<'obat' | 'non_obat'>('obat');
+  const [modalMedId, setModalMedId] = useState('');
+  const [modalSupplier, setModalSupplier] = useState('PBF Kimia Farma');
+  const [modalFakturNo, setModalFakturNo] = useState(`FK-${getWIBDateString().replace(/-/g, '')}-01`);
+  const [modalQty, setModalQty] = useState<number>(10);
+  const [modalUnit, setModalUnit] = useState<string>('Strip');
+  const [modalPurchasePrice, setModalPurchasePrice] = useState<number>(0);
+  const [modalBhpAmount, setModalBhpAmount] = useState<number>(0);
+  const [modalMarginPct, setModalMarginPct] = useState<number>(20);
+  const [modalSellingPrice, setModalSellingPrice] = useState<number>(0);
+  const [modalTaxType, setModalTaxType] = useState<'PPN' | 'NON_PPN'>('PPN');
+  const [modalNote, setModalNote] = useState('');
+  const [modalExpiredDate, setModalExpiredDate] = useState('');
+
+  // Sub-tabs for Opname
   const [opnameTab, setOpnameTab] = useState<'form' | 'log'>('form');
 
-  // Single vs Bulk Mode Toggle for Restock & Opname
+  // Single vs Bulk Mode Toggle for Opname & Restock
   const [restockMode, setRestockMode] = useState<'single' | 'bulk'>('bulk');
   const [opnameMode, setOpnameMode] = useState<'single' | 'bulk'>('bulk');
 
@@ -68,6 +105,231 @@ export const StockInView: React.FC = () => {
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
+  // Auto-sync handlers for Stock In Modal
+  const handleModalPurchasePriceChange = (val: number) => {
+    const hpp = Math.max(0, val);
+    setModalPurchasePrice(hpp);
+    const totalCost = hpp + modalBhpAmount;
+    const computedSell = Math.round(totalCost * (1 + modalMarginPct / 100));
+    setModalSellingPrice(computedSell);
+  };
+
+  const handleModalBhpAmountChange = (val: number) => {
+    const bhp = Math.max(0, val);
+    setModalBhpAmount(bhp);
+    const totalCost = modalPurchasePrice + bhp;
+    const computedSell = Math.round(totalCost * (1 + modalMarginPct / 100));
+    setModalSellingPrice(computedSell);
+  };
+
+  const handleModalMarginPctChange = (val: number) => {
+    const margin = val;
+    setModalMarginPct(margin);
+    const totalCost = modalPurchasePrice + modalBhpAmount;
+    const computedSell = Math.round(totalCost * (1 + margin / 100));
+    setModalSellingPrice(computedSell);
+  };
+
+  const handleModalSellingPriceChange = (val: number) => {
+    const sell = Math.max(0, val);
+    setModalSellingPrice(sell);
+    const totalCost = modalPurchasePrice + modalBhpAmount;
+    if (totalCost > 0) {
+      const computedMargin = Math.round(((sell - totalCost) / totalCost) * 10000) / 100;
+      setModalMarginPct(computedMargin);
+    }
+  };
+
+  // Open Restock Modal Handler
+  const openRestockModal = (type: 'obat' | 'non_obat' = 'obat') => {
+    setModalItemType(type);
+    const candidateMeds = medicines.filter(m => m.isActive && (m.itemType || 'obat') === type);
+    const defaultMed = candidateMeds[0] || medicines[0];
+    if (defaultMed) {
+      handleModalMedSelect(defaultMed.id);
+    } else {
+      setModalMedId('');
+      setModalPurchasePrice(0);
+      setModalBhpAmount(0);
+      setModalMarginPct(20);
+      setModalSellingPrice(0);
+    }
+    setModalQty(10);
+    setModalSupplier('PBF Kimia Farma');
+    setModalFakturNo(`FK-${getWIBDateString().replace(/-/g, '')}-01`);
+    setModalNote('Penerimaan stok distributor');
+    setIsRestockModalOpen(true);
+  };
+
+  const handleModalMedSelect = (medId: string) => {
+    setModalMedId(medId);
+    const targetMed = medicines.find(m => m.id === medId);
+    if (targetMed) {
+      const isPpn = (targetMed.isPpnIncluded ?? true) && (targetMed.ppnRate ?? 11) > 0;
+      const tax = isPpn ? 'PPN' : 'NON_PPN';
+      setModalTaxType(tax);
+      setModalUnit(targetMed.unit || 'Pcs');
+      const hpp = targetMed.purchasePrice || (targetMed.price > 0 ? Math.round(targetMed.price * 0.75) : 0);
+      const bhp = targetMed.bhpAmount || 0;
+      const totalCost = hpp + bhp;
+      const sell = targetMed.price || 0;
+
+      // Determine margin percentage from selected item data
+      let margin = 20;
+      if (targetMed.marginPct !== undefined && targetMed.marginPct !== null) {
+        margin = targetMed.marginPct;
+      } else if (totalCost > 0 && sell > 0) {
+        margin = Math.round(((sell - totalCost) / totalCost) * 10000) / 100;
+      }
+
+      setModalPurchasePrice(hpp);
+      setModalBhpAmount(bhp);
+      setModalMarginPct(margin);
+
+      const computedSellingPrice = sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100));
+      setModalSellingPrice(computedSellingPrice);
+      setModalExpiredDate(targetMed.expiredDate || '');
+    }
+  };
+
+  const handleRestockModalSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalMedId) {
+      setErrorMessage('Mohon pilih sediaan obat / barang.');
+      setTimeout(() => setErrorMessage(''), 3000);
+      return;
+    }
+    if (modalQty <= 0) {
+      setErrorMessage('Jumlah stok masuk harus lebih dari 0.');
+      setTimeout(() => setErrorMessage(''), 3000);
+      return;
+    }
+
+    const targetMed = medicines.find(m => m.id === modalMedId);
+    if (!targetMed) return;
+
+    const mult = (modalUnit === 'Lusin' || targetMed.unit === 'Lusin') ? 12 : (targetMed.unitMultiplier || 1);
+    const totalPcsAdded = modalQty * mult;
+
+    const isPpn = modalTaxType === 'PPN';
+    const computedTaxType: 'PPN' | 'NON_PPN' = isPpn ? 'PPN' : 'NON_PPN';
+
+    const hpp = modalPurchasePrice;
+    const bhp = modalBhpAmount;
+    const totalCost = hpp + bhp;
+    const sell = modalSellingPrice;
+    const marginPct = modalMarginPct;
+
+    const fullNote = `[RESTOCK ${computedTaxType}] Supplier: ${modalSupplier || '-'} | Faktur: ${modalFakturNo || '-'} | Qty: ${modalQty} ${modalUnit} (${totalPcsAdded} pcs) | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Margin: ${marginPct}% | Jual: ${formatRupiah(sell)} | ${modalNote || 'Restock via Dialog Modal'}`;
+
+    addStock(modalMedId, totalPcsAdded, fullNote, {
+      taxType: computedTaxType,
+      purchasePrice: hpp,
+      bhpAmount: bhp,
+      sellingPrice: sell,
+      ppnAmount: isPpn ? Math.round((hpp - hpp / 1.11) * totalPcsAdded) : 0,
+      marginPct,
+      updateMedicineMaster: true,
+    });
+
+    setIsRestockModalOpen(false);
+    setSuccessMessage(
+      `Berhasil menambahkan +${modalQty} ${modalUnit} (${totalPcsAdded} pcs) (${computedTaxType}) untuk "${targetMed.name}"! No. Faktur: ${modalFakturNo || '-'}.`
+    );
+    setIsSuccessAlert(true);
+    setTimeout(() => setIsSuccessAlert(false), 4500);
+  };
+
+  // Open New Item Modal Handlers
+  const openNewObatModal = () => {
+    setNewItemType('obat');
+    const count = medicines.filter(m => (m.itemType || 'obat') === 'obat').length + 1;
+    setNewItemCode(`OBT-${String(count).padStart(3, '0')}`);
+    setNewItemName('');
+    setNewItemCategory('Obat Bebas');
+    setNewItemUnit('Strip');
+    setNewItemStock(10);
+    setNewItemMinStock(10);
+    const nextYear = new Date();
+    nextYear.setFullYear(nextYear.getFullYear() + 1);
+    setNewItemExpiredDate(nextYear.toISOString().split('T')[0]);
+    setNewItemLocation('Rak A1');
+    setNewItemPurchasePrice(10000);
+    setNewItemBhpAmount(0);
+    setNewItemMarginPct(20);
+    setNewItemSellingPrice(12000);
+    setNewItemIsPpn(true);
+    setIsNewItemModalOpen(true);
+  };
+
+  const openNewNonObatModal = () => {
+    setNewItemType('non_obat');
+    const count = medicines.filter(m => m.itemType === 'non_obat').length + 1;
+    setNewItemCode(`NOB-${String(count).padStart(3, '0')}`);
+    setNewItemName('');
+    setNewItemCategory('Barang Umum' as MedicineCategory);
+    setNewItemUnit('Pcs');
+    setNewItemStock(10);
+    setNewItemMinStock(5);
+    const nextYear = new Date();
+    nextYear.setFullYear(nextYear.getFullYear() + 2);
+    setNewItemExpiredDate(nextYear.toISOString().split('T')[0]);
+    setNewItemLocation('Etalase Depan');
+    setNewItemPurchasePrice(15000);
+    setNewItemBhpAmount(0);
+    setNewItemMarginPct(25);
+    setNewItemSellingPrice(15000);
+    setNewItemIsPpn(false);
+    setIsNewItemModalOpen(true);
+  };
+
+  const handleCreateNewItemSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newItemName.trim() || !newItemCode.trim()) {
+      setErrorMessage('Mohon lengkapi kode dan nama item.');
+      setTimeout(() => setErrorMessage(''), 3000);
+      return;
+    }
+
+    const computedSellingPrice = Number(newItemSellingPrice || 0);
+    const hpp = Math.round(computedSellingPrice * 0.75);
+    const bhp = 0;
+    const margin = 20;
+
+    const medData = {
+      code: newItemCode,
+      name: newItemName,
+      category: newItemCategory,
+      price: computedSellingPrice,
+      purchasePrice: hpp,
+      stock: Number(newItemStock || 0),
+      minStock: Number(newItemMinStock || 10),
+      unit: newItemUnit,
+      unitMultiplier: 1,
+      expiredDate: newItemExpiredDate,
+      location: newItemLocation,
+      isActive: true,
+      itemType: newItemType,
+      marginPct: margin,
+      bhpAmount: bhp,
+      ppnRate: newItemIsPpn ? 11 : 0,
+      isPpnIncluded: newItemIsPpn,
+      purchasePriceNonPpn: newItemIsPpn ? Math.round(hpp / 1.11) : hpp,
+      purchasePriceIncPpn: newItemIsPpn ? hpp : Math.round(hpp * 1.11),
+      priceNonPpn: newItemIsPpn ? Math.round(computedSellingPrice / 1.11) : computedSellingPrice,
+      priceIncPpn: newItemIsPpn ? computedSellingPrice : Math.round(computedSellingPrice * 1.11),
+    };
+
+    const added = addMedicine(medData);
+    setIsNewItemModalOpen(false);
+
+    setSuccessMessage(
+      `Berhasil menambahkan item baru "${added.name}" (${newItemType === 'obat' ? 'Obat' : 'Non-Obat'}). Harga Jual Kasir: ${formatRupiah(computedSellingPrice)}.`
+    );
+    setIsSuccessAlert(true);
+    setTimeout(() => setIsSuccessAlert(false), 4500);
+  };
+
   // ==========================================
   // 1. SINGLE RESTOCK STATE
   // ==========================================
@@ -76,18 +338,39 @@ export const StockInView: React.FC = () => {
   const [singleNote, setSingleNote] = useState('');
   const [singleTaxType, setSingleTaxType] = useState<'PPN' | 'NON_PPN'>('PPN');
   const [singlePurchasePrice, setSinglePurchasePrice] = useState<number>(0);
+  const [singleBhpAmount, setSingleBhpAmount] = useState<number>(0);
+  const [singleMarginPct, setSingleMarginPct] = useState<number>(20);
   const [singleSellingPrice, setSingleSellingPrice] = useState<number>(0);
-  const [singleUpdateMaster, setSingleUpdateMaster] = useState(true);
 
   // Update Single Restock Defaults when medicine is selected
   useEffect(() => {
     if (selectedMedId) {
       const targetMed = medicines.find(m => m.id === selectedMedId);
       if (targetMed) {
-        setSingleTaxType(targetMed.isPpnIncluded ? 'PPN' : 'NON_PPN');
-        const defaultHpp = targetMed.purchasePrice || Math.round(targetMed.price * 0.75);
-        setSinglePurchasePrice(defaultHpp);
-        setSingleSellingPrice(targetMed.price);
+        const isPpn = (targetMed.isPpnIncluded ?? true) && (targetMed.ppnRate ?? 11) > 0;
+        const tax = isPpn ? 'PPN' : 'NON_PPN';
+        setSingleTaxType(tax);
+
+        const hpp = tax === 'PPN' 
+          ? (targetMed.purchasePriceIncPpn || targetMed.purchasePrice || Math.round(targetMed.price * 0.75))
+          : (targetMed.purchasePriceNonPpn || targetMed.purchasePrice || Math.round(targetMed.price * 0.75));
+        const bhp = targetMed.bhpAmount || 0;
+        const sell = tax === 'PPN' 
+          ? (targetMed.priceIncPpn || targetMed.price)
+          : (targetMed.priceNonPpn || targetMed.price);
+
+        const totalCost = hpp + bhp;
+        let margin = 20;
+        if (targetMed.marginPct !== undefined && targetMed.marginPct !== null) {
+          margin = targetMed.marginPct;
+        } else if (totalCost > 0 && sell > 0) {
+          margin = Math.round(((sell - totalCost) / totalCost) * 10000) / 100;
+        }
+
+        setSinglePurchasePrice(hpp);
+        setSingleBhpAmount(bhp);
+        setSingleMarginPct(margin);
+        setSingleSellingPrice(sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)));
       }
     }
   }, [selectedMedId, medicines]);
@@ -125,28 +408,48 @@ export const StockInView: React.FC = () => {
 
       // Add up to 2 PPN items
       ppnMeds.slice(0, 2).forEach((m, idx) => {
+        const hpp = m.purchasePriceIncPpn || m.purchasePrice || Math.round(m.price * 0.75);
+        const bhp = m.bhpAmount || 0;
+        const totalCost = hpp + bhp;
+        const sell = m.priceIncPpn || m.price;
+        const margin = m.marginPct !== undefined && m.marginPct !== null
+          ? m.marginPct
+          : (totalCost > 0 && sell > 0 ? Math.round(((sell - totalCost) / totalCost) * 10000) / 100 : 20);
+
         items.push({
           id: `init-ppn-${idx}-${Date.now()}`,
           medicineId: m.id,
           amount: 10,
           note: 'Restock Faktur PPN 11%',
           taxType: 'PPN',
-          purchasePrice: m.purchasePriceIncPpn || m.purchasePrice || Math.round(m.price * 0.75),
-          sellingPrice: m.priceIncPpn || m.price,
+          purchasePrice: hpp,
+          bhpAmount: bhp,
+          marginPct: margin,
+          sellingPrice: sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)),
           updateMedicineMaster: true,
         });
       });
 
       // Add up to 2 Non-PPN items
       nonPpnMeds.slice(0, 2).forEach((m, idx) => {
+        const hpp = m.purchasePriceNonPpn || m.purchasePrice || Math.round(m.price * 0.75);
+        const bhp = m.bhpAmount || 0;
+        const totalCost = hpp + bhp;
+        const sell = m.priceNonPpn || m.price;
+        const margin = m.marginPct !== undefined && m.marginPct !== null
+          ? m.marginPct
+          : (totalCost > 0 && sell > 0 ? Math.round(((sell - totalCost) / totalCost) * 10000) / 100 : 20);
+
         items.push({
           id: `init-nonppn-${idx}-${Date.now()}`,
           medicineId: m.id,
           amount: 10,
           note: 'Pembelian Nota Non-PPN',
           taxType: 'NON_PPN',
-          purchasePrice: m.purchasePriceNonPpn || m.purchasePrice || Math.round(m.price * 0.75),
-          sellingPrice: m.priceNonPpn || m.price,
+          purchasePrice: hpp,
+          bhpAmount: bhp,
+          marginPct: margin,
+          sellingPrice: sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)),
           updateMedicineMaster: true,
         });
       });
@@ -245,12 +548,21 @@ export const StockInView: React.FC = () => {
       const hpp = tax === 'PPN' 
         ? (medObj.purchasePriceIncPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75))
         : (medObj.purchasePriceNonPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75));
+      const bhp = medObj.bhpAmount || 0;
       const sell = tax === 'PPN' 
         ? (medObj.priceIncPpn || medObj.price)
         : (medObj.priceNonPpn || medObj.price);
 
+      const totalCost = hpp + bhp;
+      let margin = medObj.marginPct !== undefined && medObj.marginPct !== null ? medObj.marginPct : 20;
+      if (totalCost > 0 && sell > 0 && medObj.marginPct === undefined) {
+        margin = Math.round(((sell - totalCost) / totalCost) * 10000) / 100;
+      }
+
       setSinglePurchasePrice(hpp);
-      setSingleSellingPrice(sell);
+      setSingleBhpAmount(bhp);
+      setSingleMarginPct(margin);
+      setSingleSellingPrice(sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)));
     }
   };
 
@@ -261,12 +573,18 @@ export const StockInView: React.FC = () => {
       const hpp = tax === 'PPN' 
         ? (medObj.purchasePriceIncPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75))
         : (medObj.purchasePriceNonPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75));
+      const bhp = medObj.bhpAmount || 0;
       const sell = tax === 'PPN' 
         ? (medObj.priceIncPpn || medObj.price)
         : (medObj.priceNonPpn || medObj.price);
 
+      const totalCost = hpp + bhp;
+      let margin = medObj.marginPct !== undefined && medObj.marginPct !== null ? medObj.marginPct : 20;
+
       setSinglePurchasePrice(hpp);
-      setSingleSellingPrice(sell);
+      setSingleBhpAmount(bhp);
+      setSingleMarginPct(margin);
+      setSingleSellingPrice(sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)));
     }
   };
 
@@ -286,30 +604,35 @@ export const StockInView: React.FC = () => {
     const targetMed = medicines.find(m => m.id === selectedMedId);
     if (!targetMed) return;
 
+    const mult = targetMed.unit === 'Lusin' ? 12 : (targetMed.unitMultiplier || 1);
+    const totalPcsAdded = singleAmount * mult;
+
     // Evaluate tax classification on form submit
     const isPpn = singleTaxType === 'PPN' || ((targetMed.isPpnIncluded ?? true) && (targetMed.ppnRate ?? 11) > 0);
     const computedTaxType: 'PPN' | 'NON_PPN' = isPpn ? 'PPN' : 'NON_PPN';
     
     // Calculations
     const hpp = singlePurchasePrice;
+    const bhp = singleBhpAmount;
+    const totalCost = hpp + bhp;
     const sell = singleSellingPrice;
+    const marginPct = singleMarginPct;
     const ppnAmountPerUnit = isPpn ? Math.round(hpp - hpp / 1.11) : 0;
-    const grossProfitPerUnit = sell - hpp;
-    const marginPct = sell > 0 ? Math.round((grossProfitPerUnit / sell) * 10000) / 100 : 0;
 
-    const fullNote = `[RESTOCK ${computedTaxType}] ${singleNote || 'Stok masuk manual'} | HPP: ${formatRupiah(hpp)} | Jual: ${formatRupiah(sell)} | Margin: ${marginPct}%`;
+    const fullNote = `[RESTOCK ${computedTaxType}] ${singleNote || 'Stok masuk manual'} | Qty: ${singleAmount} ${targetMed.unit || 'unit'}${mult > 1 ? ` (${totalPcsAdded} pcs)` : ''} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Margin: ${marginPct}% | Jual: ${formatRupiah(sell)}`;
 
-    addStock(selectedMedId, Number(singleAmount), fullNote, {
+    addStock(selectedMedId, totalPcsAdded, fullNote, {
       taxType: computedTaxType,
       purchasePrice: hpp,
+      bhpAmount: bhp,
       sellingPrice: sell,
-      ppnAmount: ppnAmountPerUnit * singleAmount,
+      ppnAmount: ppnAmountPerUnit * totalPcsAdded,
       marginPct,
-      updateMedicineMaster: singleUpdateMaster,
+      updateMedicineMaster: true,
     });
 
     setSuccessMessage(
-      `Berhasil menambahkan +${singleAmount} ${targetMed.unit || 'unit'} stok (${computedTaxType}) untuk "${targetMed.name}"! Margin Laba: ${marginPct}%.`
+      `Berhasil menambahkan +${singleAmount} ${targetMed.unit || 'unit'}${mult > 1 ? ` (${totalPcsAdded} pcs)` : ''} stok (${computedTaxType}) untuk "${targetMed.name}"! Margin Laba: ${marginPct}%.`
     );
     setIsSuccessAlert(true);
     setTimeout(() => setIsSuccessAlert(false), 4000);
@@ -386,6 +709,13 @@ export const StockInView: React.FC = () => {
     if (!unselectedMed) return;
 
     const actualTax: 'PPN' | 'NON_PPN' = bulkViewTaxFilter === 'NON_PPN' ? 'NON_PPN' : (bulkViewTaxFilter === 'PPN' ? 'PPN' : (((unselectedMed.isPpnIncluded ?? true) && (unselectedMed.ppnRate ?? 11) > 0) ? 'PPN' : 'NON_PPN'));
+    const hpp = actualTax === 'NON_PPN' ? (unselectedMed.purchasePriceNonPpn || unselectedMed.purchasePrice || Math.round(unselectedMed.price * 0.75)) : (unselectedMed.purchasePriceIncPpn || unselectedMed.purchasePrice || Math.round(unselectedMed.price * 0.75));
+    const bhp = unselectedMed.bhpAmount || 0;
+    const totalCost = hpp + bhp;
+    const sell = actualTax === 'NON_PPN' ? (unselectedMed.priceNonPpn || unselectedMed.price) : (unselectedMed.priceIncPpn || unselectedMed.price);
+    const margin = unselectedMed.marginPct !== undefined && unselectedMed.marginPct !== null
+      ? unselectedMed.marginPct
+      : (totalCost > 0 && sell > 0 ? Math.round(((sell - totalCost) / totalCost) * 10000) / 100 : 20);
 
     setBulkItems(prev => [
       ...prev,
@@ -395,8 +725,10 @@ export const StockInView: React.FC = () => {
         amount: 10,
         note: bulkCategoryFilter !== 'all' ? `Restock Kategori ${unselectedMed.category}` : '',
         taxType: actualTax,
-        purchasePrice: actualTax === 'NON_PPN' ? (unselectedMed.purchasePriceNonPpn || unselectedMed.purchasePrice || Math.round(unselectedMed.price * 0.75)) : (unselectedMed.purchasePriceIncPpn || unselectedMed.purchasePrice || Math.round(unselectedMed.price * 0.75)),
-        sellingPrice: actualTax === 'NON_PPN' ? (unselectedMed.priceNonPpn || unselectedMed.price) : (unselectedMed.priceIncPpn || unselectedMed.price),
+        purchasePrice: hpp,
+        bhpAmount: bhp,
+        marginPct: margin,
+        sellingPrice: sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)),
         updateMedicineMaster: true,
       },
     ]);
@@ -425,6 +757,13 @@ export const StockInView: React.FC = () => {
     const newItems: BulkRestockItem[] = filteredMeds.map((m, idx) => {
       const isPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
       const tax: 'PPN' | 'NON_PPN' = bulkViewTaxFilter === 'NON_PPN' ? 'NON_PPN' : (bulkViewTaxFilter === 'PPN' ? 'PPN' : (isPpn ? 'PPN' : 'NON_PPN'));
+      const hpp = tax === 'NON_PPN' ? (m.purchasePriceNonPpn || m.purchasePrice || Math.round(m.price * 0.75)) : (m.purchasePriceIncPpn || m.purchasePrice || Math.round(m.price * 0.75));
+      const bhp = m.bhpAmount || 0;
+      const totalCost = hpp + bhp;
+      const sell = tax === 'NON_PPN' ? (m.priceNonPpn || m.price) : (m.priceIncPpn || m.price);
+      const margin = m.marginPct !== undefined && m.marginPct !== null
+        ? m.marginPct
+        : (totalCost > 0 && sell > 0 ? Math.round(((sell - totalCost) / totalCost) * 10000) / 100 : 20);
 
       return {
         id: `bulk-cat-${m.id}-${idx}-${Date.now()}`,
@@ -432,8 +771,10 @@ export const StockInView: React.FC = () => {
         amount: 10,
         note: `Restock Kategori ${m.category}`,
         taxType: tax,
-        purchasePrice: tax === 'NON_PPN' ? (m.purchasePriceNonPpn || m.purchasePrice || Math.round(m.price * 0.75)) : (m.purchasePriceIncPpn || m.purchasePrice || Math.round(m.price * 0.75)),
-        sellingPrice: tax === 'NON_PPN' ? (m.priceNonPpn || m.price) : (m.priceIncPpn || m.price),
+        purchasePrice: hpp,
+        bhpAmount: bhp,
+        marginPct: margin,
+        sellingPrice: sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)),
         updateMedicineMaster: true,
       };
     });
@@ -481,17 +822,46 @@ export const StockInView: React.FC = () => {
           if (medObj) {
             const isPpn = (medObj.isPpnIncluded ?? true) && (medObj.ppnRate ?? 11) > 0;
             const tax: 'PPN' | 'NON_PPN' = isPpn ? 'PPN' : 'NON_PPN';
+            const hpp = tax === 'NON_PPN' ? (medObj.purchasePriceNonPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75)) : (medObj.purchasePriceIncPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75));
+            const bhp = medObj.bhpAmount || 0;
+            const totalCost = hpp + bhp;
+            const sell = tax === 'NON_PPN' ? (medObj.priceNonPpn || medObj.price) : (medObj.priceIncPpn || medObj.price);
+            const margin = medObj.marginPct !== undefined && medObj.marginPct !== null
+              ? medObj.marginPct
+              : (totalCost > 0 && sell > 0 ? Math.round(((sell - totalCost) / totalCost) * 10000) / 100 : 20);
+
             return {
               ...item,
               medicineId: value,
               taxType: tax,
-              purchasePrice: tax === 'NON_PPN' ? (medObj.purchasePriceNonPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75)) : (medObj.purchasePriceIncPpn || medObj.purchasePrice || Math.round(medObj.price * 0.75)),
-              sellingPrice: tax === 'NON_PPN' ? (medObj.priceNonPpn || medObj.price) : (medObj.priceIncPpn || medObj.price),
+              purchasePrice: hpp,
+              bhpAmount: bhp,
+              marginPct: margin,
+              sellingPrice: sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100)),
             };
           }
         }
 
-        return { ...item, [field]: value };
+        const updated = { ...item, [field]: value };
+
+        // Auto recalculate selling price or margin percentage
+        if (field === 'purchasePrice' || field === 'bhpAmount' || field === 'marginPct') {
+          const hpp = Number(field === 'purchasePrice' ? value : item.purchasePrice || 0);
+          const bhp = Number(field === 'bhpAmount' ? value : item.bhpAmount || 0);
+          const margin = Number(field === 'marginPct' ? value : item.marginPct || 0);
+          const totalCost = hpp + bhp;
+          updated.sellingPrice = Math.round(totalCost * (1 + margin / 100));
+        } else if (field === 'sellingPrice') {
+          const hpp = Number(item.purchasePrice || 0);
+          const bhp = Number(item.bhpAmount || 0);
+          const totalCost = hpp + bhp;
+          const sell = Number(value || 0);
+          if (totalCost > 0) {
+            updated.marginPct = Math.round(((sell - totalCost) / totalCost) * 10000) / 100;
+          }
+        }
+
+        return updated;
       })
     );
   };
@@ -510,26 +880,30 @@ export const StockInView: React.FC = () => {
 
     const itemsToAdd = validItems.map(item => {
       const targetMed = medicines.find(m => m.id === item.medicineId);
+      const mult = targetMed ? (targetMed.unit === 'Lusin' ? 12 : (targetMed.unitMultiplier || 1)) : 1;
+      const totalPcsAdded = Number(item.amount) * mult;
+
       // Determine tax classification on form submit based on item selection or medicine master data
       const isPpn = item.taxType === 'PPN' || (targetMed ? ((targetMed.isPpnIncluded ?? true) && (targetMed.ppnRate ?? 11) > 0) : true);
       const computedTaxType: 'PPN' | 'NON_PPN' = isPpn ? 'PPN' : 'NON_PPN';
 
       const hpp = item.purchasePrice;
+      const bhp = item.bhpAmount || 0;
       const sell = item.sellingPrice;
       const ppnAmountPerUnit = isPpn ? Math.round(hpp - hpp / 1.11) : 0;
-      const profitPerUnit = sell - hpp;
-      const marginPct = sell > 0 ? Math.round((profitPerUnit / sell) * 10000) / 100 : 0;
+      const marginPct = item.marginPct;
 
-      const itemNote = `${fullBatchHeader} [Tax: ${computedTaxType} | HPP: ${formatRupiah(hpp)} | Jual: ${formatRupiah(sell)} | Margin: ${marginPct}%] ${item.note ? ' - ' + item.note : ''}`;
+      const itemNote = `${fullBatchHeader} [Tax: ${computedTaxType} | Qty: ${item.amount} ${targetMed?.unit || 'unit'}${mult > 1 ? ` (${totalPcsAdded} pcs)` : ''} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Jual: ${formatRupiah(sell)} | Margin: ${marginPct}%] ${item.note ? ' - ' + item.note : ''}`;
 
       return {
         medicineId: item.medicineId,
-        amount: Number(item.amount),
+        amount: totalPcsAdded,
         note: itemNote,
         taxType: computedTaxType,
         purchasePrice: hpp,
+        bhpAmount: bhp,
         sellingPrice: sell,
-        ppnAmount: ppnAmountPerUnit * item.amount,
+        ppnAmount: ppnAmountPerUnit * totalPcsAdded,
         marginPct,
         updateMedicineMaster: item.updateMedicineMaster,
       };
@@ -868,7 +1242,8 @@ export const StockInView: React.FC = () => {
 
     ppnRestockLogs.forEach(sh => {
       const qty = sh.amount || 0;
-      const hpp = sh.purchasePrice || 0;
+      const med = medicines.find(m => m.id === sh.medicineId);
+      const hpp = sh.purchasePrice || (med?.purchasePrice || (med?.price ? Math.round(med.price * 0.75) : 0));
       const ppnUnit = sh.ppnAmount ? sh.ppnAmount / (qty || 1) : Math.round(hpp - hpp / 1.11);
       totalQty += qty;
       totalHppCost += hpp * qty;
@@ -876,7 +1251,7 @@ export const StockInView: React.FC = () => {
     });
 
     return { totalTrx, totalQty, totalHppCost, totalPpnInput };
-  }, [ppnRestockLogs]);
+  }, [ppnRestockLogs, medicines]);
 
   const restockNonPpnStats = React.useMemo(() => {
     let totalTrx = nonPpnRestockLogs.length;
@@ -885,13 +1260,14 @@ export const StockInView: React.FC = () => {
 
     nonPpnRestockLogs.forEach(sh => {
       const qty = sh.amount || 0;
-      const hpp = sh.purchasePrice || 0;
+      const med = medicines.find(m => m.id === sh.medicineId);
+      const hpp = sh.purchasePrice || (med?.purchasePrice || (med?.price ? Math.round(med.price * 0.75) : 0));
       totalQty += qty;
       totalHppCost += hpp * qty;
     });
 
     return { totalTrx, totalQty, totalHppCost };
-  }, [nonPpnRestockLogs]);
+  }, [nonPpnRestockLogs, medicines]);
 
   const handleResetAllOpnameToSystem = () => {
     setBulkOpnameData(prev => {
@@ -1026,29 +1402,61 @@ export const StockInView: React.FC = () => {
       </div>
 
       {/* Primary Sub Tabs */}
-      <div className="flex border-b border-slate-200 gap-6 text-xs font-bold">
-        <button
-          onClick={() => setActiveSubTab('masuk')}
-          className={`pb-3 flex items-center gap-2 border-b-2 transition-colors ${
-            activeSubTab === 'masuk'
-              ? 'border-emerald-600 text-emerald-700 font-extrabold'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <PackagePlus className="w-4 h-4" />
-          1. Input Stok Masuk & Perhitungan Margin
-        </button>
-        <button
-          onClick={() => setActiveSubTab('penyesuaian')}
-          className={`pb-3 flex items-center gap-2 border-b-2 transition-colors ${
-            activeSubTab === 'penyesuaian'
-              ? 'border-emerald-600 text-emerald-700 font-extrabold'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <History className="w-4 h-4" />
-          2. Penyesuaian Stok (Stok Opnam Physical)
-        </button>
+      <div className="flex flex-wrap border-b border-slate-200 gap-4 text-xs font-bold justify-between items-center pb-1">
+        <div className="flex gap-4">
+          <button
+            onClick={() => {
+              setActiveSubTab('masuk');
+              setRestockItemType('obat');
+            }}
+            className={`pb-3 flex items-center gap-2 border-b-2 transition-colors ${
+              activeSubTab === 'masuk' && restockItemType === 'obat'
+                ? 'border-emerald-600 text-emerald-700 font-extrabold'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <PackagePlus className="w-4 h-4 text-emerald-600" />
+            1. Stok Masuk - Obat
+          </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('masuk');
+              setRestockItemType('non_obat');
+            }}
+            className={`pb-3 flex items-center gap-2 border-b-2 transition-colors ${
+              activeSubTab === 'masuk' && restockItemType === 'non_obat'
+                ? 'border-purple-600 text-purple-700 font-extrabold'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <ShoppingBag className="w-4 h-4 text-purple-600" />
+            2. Stok Masuk - Non Obat
+          </button>
+          <button
+            onClick={() => setActiveSubTab('penyesuaian')}
+            className={`pb-3 flex items-center gap-2 border-b-2 transition-colors ${
+              activeSubTab === 'penyesuaian'
+                ? 'border-blue-600 text-blue-700 font-extrabold'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <History className="w-4 h-4 text-blue-600" />
+            3. Penyesuaian Stok (Stok Opnam)
+          </button>
+        </div>
+
+        {activeSubTab === 'masuk' && (
+          <div className="pb-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => openRestockModal(restockItemType)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 shadow-md transition-all cursor-pointer"
+            >
+              <PackagePlus className="w-4 h-4" />
+              ＋ Input Stok Masuk Baru (Form Dialog)
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Alert Success */}
@@ -1058,17 +1466,6 @@ export const StockInView: React.FC = () => {
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
             {successMessage}
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              if (activeSubTab === 'masuk') setRestockTab('log');
-              else setOpnameTab('log');
-            }}
-            className="px-3 py-1.5 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition-colors shrink-0 text-xs flex items-center gap-1.5 shadow-2xs"
-          >
-            <History className="w-3.5 h-3.5" />
-            Lihat Log Riwayat →
-          </button>
         </div>
       )}
 
@@ -1086,842 +1483,15 @@ export const StockInView: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 1: INPUT STOK MASUK & PERHITUNGAN MARGIN */}
+      {/* TAMPILAN UNIFIED: LOG & RIWAYAT STOK MASUK + BUTTON INPUT DIALOG MODAL */}
       {/* ========================================================================= */}
       {activeSubTab === 'masuk' && (
         <div className="space-y-5">
-          {/* Restock Secondary Sub-Tab Switcher (Form vs Log) */}
-          <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
-            <button
-              type="button"
-              onClick={() => setRestockTab('form')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-                restockTab === 'form'
-                  ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              <ListPlus className="w-4 h-4" />
-              Form Input & Kalkulator Margin
-            </button>
-            <button
-              type="button"
-              onClick={() => setRestockTab('log')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-                restockTab === 'log'
-                  ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              <History className="w-4 h-4" />
-              Log & Riwayat Restock (PPN vs Non-PPN)
-              <span
-                className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                  restockTab === 'log' ? 'bg-emerald-800 text-white' : 'bg-slate-100 text-slate-700'
-                }`}
-              >
-                {filteredRestockHistory.length}
-              </span>
-            </button>
-          </div>
 
-          {/* TAB CONTENT 1: FORM INPUT & MARGIN CALCULATOR */}
-          {restockTab === 'form' && (
-            <div className="space-y-5">
-              {/* Category Quick Selector Toolbar ("Atur Stok Barang Berdasarkan Kategori") */}
-              <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950 text-white p-4 rounded-2xl border border-slate-800 shadow-sm space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Tag className="w-4.5 h-4.5 text-emerald-400 shrink-0" />
-                    <div>
-                      <h3 className="font-extrabold text-xs text-white">Atur Stok Barang Berdasarkan Kategori Obat</h3>
-                      <p className="text-[11px] text-slate-300">
-                        Pilih kategori obat dari dropdown di bawah untuk memuat seluruh sediaan obat aktif kategori tersebut secara otomatis ke form input restock bulk.
-                      </p>
-                    </div>
-                  </div>
-                </div>
 
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
-                  <div className="flex-1 flex items-center gap-2">
-                    <label className="text-[11px] font-extrabold text-slate-300 shrink-0">
-                      Pilih Kategori Obat:
-                    </label>
-                    <select
-                      value={bulkCategoryFilter}
-                      onChange={(e) => handleAddCategoryMedsToBulk(e.target.value)}
-                      className="w-full bg-slate-800 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-400 cursor-pointer shadow-inner"
-                    >
-                      <option value="all">
-                        ⚡ Semua Kategori ({
-                          medicines.filter(m => {
-                            if (!m.isActive) return false;
-                            const isPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
-                            if (bulkViewTaxFilter === 'PPN') return isPpn;
-                            if (bulkViewTaxFilter === 'NON_PPN') return !isPpn;
-                            return true;
-                          }).length
-                        } Obat)
-                      </option>
-                      {uniqueCategories.map(cat => {
-                        const count = medicines.filter(m => {
-                          if (!m.isActive || m.category !== cat) return false;
-                          const isPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
-                          if (bulkViewTaxFilter === 'PPN') return isPpn;
-                          if (bulkViewTaxFilter === 'NON_PPN') return !isPpn;
-                          return true;
-                        }).length;
 
-                        return (
-                          <option key={cat} value={cat}>
-                            Kategori: {cat} ({count} Obat)
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleAddCategoryMedsToBulk(bulkCategoryFilter)}
-                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs shrink-0"
-                  >
-                    ⚡ Muat Sediaan Kategori
-                  </button>
-                </div>
-              </div>
-
-              {/* Restock Mode Toggle Header */}
-              <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
-                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Mode Input Stok Masuk:
-                  </span>
-                  <div className="flex items-center bg-slate-100 p-1 rounded-xl font-bold text-xs gap-1">
-                    <button
-                      onClick={() => setRestockMode('bulk')}
-                      className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
-                        restockMode === 'bulk'
-                          ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <ListPlus className="w-3.5 h-3.5" />
-                      Bulk / Batch Restock Banyak Obat
-                      <span className="bg-emerald-800 text-white text-[9px] px-1.5 py-0.2 rounded-full font-bold">
-                        Rekomendasi
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => setRestockMode('single')}
-                      className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
-                        restockMode === 'single'
-                          ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Form Single (1 Item)
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-1 bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-[11px] font-bold flex items-center gap-1">
-                    Status Perpajakan: Otomatis Sesuai Sediaan Master
-                  </span>
-                </div>
-              </div>
-
-              {/* MODE BULK RESTOCK */}
-              {restockMode === 'bulk' && (
-                <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-xs space-y-5">
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                    <div>
-                      <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                        <ListPlus className="w-4.5 h-4.5 text-emerald-600" />
-                        Form Input Restock Batch & Analisis Margin Laba
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Lengkapi nomor faktur, klasifikasi perpajakan (PPN 11% vs Non-PPN), HPP Modal, dan harga jual untuk melihat estimasi margin laba kotor.
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={handleAddBulkRow}
-                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors border border-emerald-200"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        + Tambah Baris Item
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setBulkItems([])}
-                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs flex items-center gap-1 transition-colors"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        Kosongkan
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Batch Supplier Metadata Header */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
-                        <Building2 className="w-3.5 h-3.5 text-slate-500" /> Distributor / PBF Supplier
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={bulkSupplier}
-                        onChange={e => setBulkSupplier(e.target.value)}
-                        placeholder="e.g. PBF Kimia Farma / Anugrah Argon"
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
-                        <FileText className="w-3.5 h-3.5 text-slate-500" /> No. Faktur / Surat Jalan
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={bulkFakturNo}
-                        onChange={e => setBulkFakturNo(e.target.value)}
-                        placeholder="e.g. FK-2026-0881"
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Catatan Nota Batch</label>
-                      <input
-                        type="text"
-                        value={bulkNote}
-                        onChange={e => setBulkNote(e.target.value)}
-                        placeholder="e.g. Restock rutin gudang utama"
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Interactive Bulk Items Table with Margin & Tax Detail */}
-                  <form onSubmit={handleBulkRestockSubmit} className="space-y-4">
-                    {/* Tax & Category View & Filter Bar for Bulk Input */}
-                    <div className="space-y-2.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
-                      {/* Row 1: Category Filter Dropdown */}
-                      <div className="flex flex-wrap items-center justify-between gap-3 pb-1">
-                        <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
-                          <span className="font-extrabold text-slate-700 shrink-0 flex items-center gap-1 text-xs">
-                            <Tag className="w-3.5 h-3.5 text-indigo-600" /> Dropdown Filter Kategori:
-                          </span>
-                          <select
-                            value={bulkCategoryFilter}
-                            onChange={(e) => setBulkCategoryFilter(e.target.value)}
-                            className="bg-white text-indigo-950 font-extrabold text-xs px-3 py-1.5 rounded-xl border border-slate-300 focus:outline-none focus:border-indigo-500 cursor-pointer shadow-2xs"
-                          >
-                            <option value="all">
-                              Semua Kategori ({
-                                bulkItems.filter(it => {
-                                  if (bulkViewTaxFilter === 'PPN') return it.taxType === 'PPN';
-                                  if (bulkViewTaxFilter === 'NON_PPN') return it.taxType === 'NON_PPN';
-                                  return true;
-                                }).length
-                              } Item)
-                            </option>
-                            {uniqueCategories.map(cat => {
-                              const catInBulk = bulkItems.filter(it => {
-                                const m = medicines.find(med => med.id === it.medicineId);
-                                if (!m || m.category !== cat) return false;
-                                if (bulkViewTaxFilter === 'PPN') return it.taxType === 'PPN';
-                                if (bulkViewTaxFilter === 'NON_PPN') return it.taxType === 'NON_PPN';
-                                return true;
-                              }).length;
-
-                              return (
-                                <option key={cat} value={cat}>
-                                  Kategori: {cat} ({catInBulk} Item)
-                                </option>
-                              );
-                            })}
-                          </select>
-                        </div>
-                      </div>
-
-                      {/* Row 2: Tax Filter Tabs & Summary Badges */}
-                      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200/80">
-                        <div className="flex items-center gap-2 overflow-x-auto">
-                          <span className="font-bold text-slate-700 shrink-0">Filter Perpajakan:</span>
-                          <button
-                            type="button"
-                            onClick={() => handleSwitchBulkTaxFilter('all')}
-                            className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer ${
-                              bulkViewTaxFilter === 'all'
-                                ? 'bg-emerald-600 text-white shadow-2xs'
-                                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            Semua Perpajakan ({bulkMetrics.totalItems})
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSwitchBulkTaxFilter('PPN')}
-                            className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer border ${
-                              bulkViewTaxFilter === 'PPN'
-                                ? 'bg-blue-900 text-white border-blue-800 shadow-2xs'
-                                : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
-                            }`}
-                          >
-                            🏷️ Faktur PPN 11% ({bulkMetrics.ppnItemCount})
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSwitchBulkTaxFilter('NON_PPN')}
-                            className={`px-3 py-1.5 rounded-xl font-extrabold transition-all cursor-pointer border ${
-                              bulkViewTaxFilter === 'NON_PPN'
-                                ? 'bg-slate-900 text-white border-slate-800 shadow-2xs'
-                                : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-100'
-                            }`}
-                          >
-                            📦 Nota Non-PPN ({bulkMetrics.nonPpnItemCount})
-                          </button>
-                        </div>
-
-                        <div className="flex items-center gap-2 text-[11px]">
-                          {bulkCategoryFilter !== 'all' && (
-                            <button
-                              type="button"
-                              onClick={() => handleAddCategoryMedsToBulk(bulkCategoryFilter)}
-                              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg transition-colors inline-flex items-center gap-1 shadow-2xs text-[11px]"
-                            >
-                              ⚡ Muat Sediaan "{bulkCategoryFilter}"
-                            </button>
-                          )}
-                          <span className="text-blue-900 font-bold bg-blue-100 px-2.5 py-1 rounded-lg border border-blue-200">
-                            🏷️ PPN 11%: {bulkMetrics.ppnItemCount} Item
-                          </span>
-                          <span className="text-slate-800 font-bold bg-slate-200 px-2.5 py-1 rounded-lg border border-slate-300">
-                            📦 Non-PPN: {bulkMetrics.nonPpnItemCount} Item
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="overflow-x-auto border border-slate-200 rounded-2xl shadow-2xs">
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-slate-100/90 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
-                            <th className="py-3 px-3 w-8 text-center">No</th>
-                            <th className="py-3 px-3 min-w-[200px]">Sediaan Obat & Kategori</th>
-                            <th className="py-3 px-3 text-center min-w-[120px]">Jenis Perpajakan</th>
-                            <th className="py-3 px-3 text-center w-24">Qty Masuk</th>
-                            <th className="py-3 px-3 min-w-[130px]">HPP Beli Modal (Rp)</th>
-                            <th className="py-3 px-3 min-w-[130px]">Harga Jual (Rp)</th>
-                            <th className="py-3 px-3 text-center min-w-[150px]">Rincian Margin & Laba</th>
-                            <th className="py-3 px-3 text-center w-12">Hapus</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {bulkItems.filter(item => {
-                            const medObj = medicines.find(m => m.id === item.medicineId);
-                            const matchCategory = bulkCategoryFilter === 'all' || (medObj && medObj.category === bulkCategoryFilter);
-                            const matchTax = bulkViewTaxFilter === 'all' || item.taxType === bulkViewTaxFilter;
-                            return matchCategory && matchTax;
-                          }).length === 0 ? (
-                            <tr>
-                              <td colSpan={8} className="py-8 text-center text-slate-400">
-                                <div className="space-y-2">
-                                  <p className="font-semibold text-slate-600">
-                                    Tidak ada item restock pada tab <strong>Kategori: {bulkCategoryFilter === 'all' ? 'Semua Kategori' : bulkCategoryFilter}</strong>
-                                    {bulkViewTaxFilter !== 'all' && ` & Tax: ${bulkViewTaxFilter === 'PPN' ? 'Faktur PPN 11%' : 'Nota Non-PPN'}`}.
-                                  </p>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleAddCategoryMedsToBulk(bulkCategoryFilter)}
-                                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-colors inline-flex items-center gap-1.5 shadow-2xs"
-                                  >
-                                    ⚡ Muat Semua Obat Kategori "{bulkCategoryFilter === 'all' ? 'Semua Kategori' : bulkCategoryFilter}"
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ) : (
-                            bulkItems
-                              .filter(item => {
-                                const medObj = medicines.find(m => m.id === item.medicineId);
-                                const matchCategory = bulkCategoryFilter === 'all' || (medObj && medObj.category === bulkCategoryFilter);
-                                const matchTax = bulkViewTaxFilter === 'all' || item.taxType === bulkViewTaxFilter;
-                                return matchCategory && matchTax;
-                              })
-                              .map((item, idx) => {
-                              const medObj = medicines.find(m => m.id === item.medicineId);
-                              const currentStk = medObj ? medObj.stock : 0;
-                              const newStk = currentStk + Number(item.amount || 0);
-
-                              // Margin & Tax calculations
-                              const hpp = Number(item.purchasePrice || 0);
-                              const sell = Number(item.sellingPrice || 0);
-                              const isPpn = item.taxType === 'PPN';
-                              const dppBeli = isPpn ? Math.round(hpp / 1.11) : hpp;
-                              const ppnInputUnit = isPpn ? hpp - dppBeli : 0;
-                              const profitPerUnit = sell - hpp;
-                              const marginPct = sell > 0 ? Math.round((profitPerUnit / sell) * 10000) / 100 : 0;
-                              const markupPct = hpp > 0 ? Math.round((profitPerUnit / hpp) * 10000) / 100 : 0;
-                              const totalBatchProfit = profitPerUnit * Number(item.amount || 0);
-
-                              return (
-                                <tr key={item.id} className="hover:bg-slate-50/90 transition-colors">
-                                  <td className="py-3 px-3 text-center font-bold text-slate-400">
-                                    {idx + 1}
-                                  </td>
-
-                                  {/* Medicine Dropdown */}
-                                  <td className="py-3 px-3">
-                                    <select
-                                      required
-                                      value={item.medicineId}
-                                      onChange={e =>
-                                        handleBulkRestockItemChange(item.id, 'medicineId', e.target.value)
-                                      }
-                                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-none focus:border-emerald-500"
-                                    >
-                                      {medicines
-                                        .filter(m => {
-                                          if (!m.isActive && m.id !== item.medicineId) return false;
-                                          if (bulkCategoryFilter !== 'all' && m.category !== bulkCategoryFilter && m.id !== item.medicineId) return false;
-                                          const isMedPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
-                                          if (bulkViewTaxFilter === 'PPN') return isMedPpn || m.id === item.medicineId;
-                                          if (bulkViewTaxFilter === 'NON_PPN') return !isMedPpn || m.id === item.medicineId;
-                                          return true;
-                                        })
-                                        .map(m => {
-                                          const isMedPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
-                                          return (
-                                            <option key={m.id} value={m.id}>
-                                              {m.name} ({m.code}) — {m.category} [{isMedPpn ? 'PPN 11%' : 'Non-PPN'}]
-                                            </option>
-                                          );
-                                        })}
-                                    </select>
-                                    <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1 px-1">
-                                      <span>Stok: {currentStk} → <strong className="text-emerald-700">{newStk} {medObj?.unit}</strong></span>
-                                      <span className="font-semibold text-indigo-700">{medObj?.category}</span>
-                                    </div>
-                                  </td>
-
-                                  {/* Tax Status Informative Badge (PPN vs NON_PPN) */}
-                                  <td className="py-3 px-3 text-center">
-                                    <span
-                                      className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded border ${
-                                        isPpn
-                                          ? 'bg-blue-50 text-blue-900 border-blue-200'
-                                          : 'bg-slate-100 text-slate-700 border-slate-200'
-                                      }`}
-                                    >
-                                      {isPpn ? '🏷️ PPN 11%' : '📦 Non-PPN'}
-                                    </span>
-                                    {isPpn && (
-                                      <span className="block text-[9px] text-blue-700 font-medium mt-0.5">
-                                        PPN: {formatRupiah(ppnInputUnit)}/unit
-                                      </span>
-                                    )}
-                                  </td>
-
-                                  {/* Amount Input */}
-                                  <td className="py-3 px-3">
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      required
-                                      value={item.amount}
-                                      onChange={e =>
-                                        handleBulkRestockItemChange(
-                                          item.id,
-                                          'amount',
-                                          Math.max(1, Number(e.target.value))
-                                        )
-                                      }
-                                      className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-emerald-400 font-black text-emerald-800 text-xs text-center focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                                    />
-                                  </td>
-
-                                  {/* Purchase Price Input */}
-                                  <td className="py-3 px-3">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      required
-                                      value={item.purchasePrice}
-                                      onChange={e =>
-                                        handleBulkRestockItemChange(
-                                          item.id,
-                                          'purchasePrice',
-                                          Math.max(0, Number(e.target.value))
-                                        )
-                                      }
-                                      className="w-full px-2 py-1.5 rounded-lg bg-white border border-slate-300 font-bold text-slate-900 text-xs focus:outline-none focus:border-emerald-500"
-                                    />
-                                    <span className="block text-[9px] text-slate-400 mt-0.5">
-                                      {formatRupiah(hpp)}
-                                    </span>
-                                  </td>
-
-                                  {/* Selling Price Input */}
-                                  <td className="py-3 px-3">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      required
-                                      value={item.sellingPrice}
-                                      onChange={e =>
-                                        handleBulkRestockItemChange(
-                                          item.id,
-                                          'sellingPrice',
-                                          Math.max(0, Number(e.target.value))
-                                        )
-                                      }
-                                      className="w-full px-2 py-1.5 rounded-lg bg-white border border-slate-300 font-bold text-indigo-900 text-xs focus:outline-none focus:border-indigo-500"
-                                    />
-                                    <span className="block text-[9px] text-slate-400 mt-0.5">
-                                      {formatRupiah(sell)}
-                                    </span>
-                                  </td>
-
-                                  {/* Detailed Margin Breakdown Cell */}
-                                  <td className="py-3 px-3 text-center">
-                                    <div className="bg-slate-50 p-2 rounded-xl border border-slate-200 text-left space-y-1">
-                                      <div className="flex items-center justify-between text-[11px]">
-                                        <span className="text-slate-500 font-medium">Laba/Unit:</span>
-                                        <span className={`font-extrabold ${profitPerUnit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
-                                          {formatRupiah(profitPerUnit)}
-                                        </span>
-                                      </div>
-
-                                      <div className="flex items-center justify-between text-[10px]">
-                                        <span className="text-slate-500">Margin:</span>
-                                        <span className={`font-black px-1.5 py-0.2 rounded ${
-                                          marginPct >= 20 ? 'bg-emerald-100 text-emerald-800' : marginPct >= 10 ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
-                                        }`}>
-                                          {marginPct}% (Markup {markupPct}%)
-                                        </span>
-                                      </div>
-
-                                      <div className="flex items-center justify-between text-[10px] border-t border-slate-200 pt-1">
-                                        <span className="text-slate-500 font-medium">Total Profit Batch:</span>
-                                        <span className="font-extrabold text-emerald-800">
-                                          {formatRupiah(totalBatchProfit)}
-                                        </span>
-                                      </div>
-
-                                      <label className="flex items-center gap-1.5 text-[9px] text-slate-600 font-medium pt-0.5 cursor-pointer">
-                                        <input
-                                          type="checkbox"
-                                          checked={item.updateMedicineMaster}
-                                          onChange={e =>
-                                            handleBulkRestockItemChange(
-                                              item.id,
-                                              'updateMedicineMaster',
-                                              e.target.checked
-                                            )
-                                          }
-                                          className="rounded text-emerald-600 focus:ring-emerald-500"
-                                        />
-                                        <span>Sync Ke Katalog Master</span>
-                                      </label>
-                                    </div>
-                                  </td>
-
-                                  {/* Remove Row */}
-                                  <td className="py-3 px-3 text-center">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveBulkRow(item.id)}
-                                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                                      title="Hapus Baris"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Batch Summary & Profit Analytics Card */}
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white p-4.5 rounded-2xl shadow-md border border-slate-800 text-xs">
-                      <div className="space-y-1">
-                        <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Total Item & Volume</span>
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-xl font-extrabold text-white">{bulkMetrics.totalItems} Jenis</span>
-                          <span className="text-sm font-bold text-emerald-400">({bulkMetrics.totalQty} Unit)</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 block">
-                          Faktur PPN: <strong>{bulkMetrics.ppnItemCount}</strong> | Non-PPN: <strong>{bulkMetrics.nonPpnItemCount}</strong>
-                        </span>
-                      </div>
-
-                      <div className="space-y-1 border-t md:border-t-0 md:border-l border-slate-700/80 pt-2 md:pt-0 md:pl-3">
-                        <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Total HPP & PPN Masukan</span>
-                        <span className="text-lg font-black text-amber-300 block">{formatRupiah(bulkMetrics.totalHppCost)}</span>
-                        <span className="text-[10px] text-blue-300 block font-semibold">
-                          PPN Masukan (11%): {formatRupiah(bulkMetrics.totalPpnInput)}
-                        </span>
-                      </div>
-
-                      <div className="space-y-1 border-t md:border-t-0 md:border-l border-slate-700/80 pt-2 md:pt-0 md:pl-3">
-                        <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Proyeksi Omset Jual</span>
-                        <span className="text-lg font-black text-indigo-200 block">{formatRupiah(bulkMetrics.totalExpectedRevenue)}</span>
-                        <span className="text-[10px] text-emerald-400 block font-bold">
-                          Est. Profit Kotor: {formatRupiah(bulkMetrics.totalGrossProfit)}
-                        </span>
-                      </div>
-
-                      <div className="space-y-1 border-t md:border-t-0 md:border-l border-slate-700/80 pt-2 md:pt-0 md:pl-3 flex flex-col justify-between">
-                        <div>
-                          <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Analisis Margin Batch</span>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-xl font-extrabold text-emerald-400">{bulkMetrics.avgMarginPct}%</span>
-                            <span className="text-xs text-slate-300 font-medium">(Markup {bulkMetrics.avgMarkupPct}%)</span>
-                          </div>
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={bulkItems.length === 0}
-                          className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 text-xs"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          Simpan & Update Stok ({bulkItems.length} Item)
-                        </button>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-              )}
-
-              {/* MODE SINGLE RESTOCK FORM */}
-              {restockMode === 'single' && (
-                <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-xs space-y-4 max-w-2xl">
-                  <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                    <Plus className="w-4 h-4 text-emerald-600" />
-                    Form Penerimaan Stok Single & Perhitungan Margin
-                  </h3>
-
-                  <form onSubmit={handleSingleStockInSubmit} className="space-y-4 text-xs">
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label className="block font-semibold text-slate-700">Pilih Sediaan Obat</label>
-                        <div className="flex items-center gap-1 text-[10px] font-bold">
-                          <span className="text-slate-400">Filter Tax:</span>
-                          <button
-                            type="button"
-                            onClick={() => setSingleTaxFilter('all')}
-                            className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
-                              singleTaxFilter === 'all'
-                                ? 'bg-emerald-600 text-white shadow-2xs font-extrabold'
-                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                          >
-                            Semua
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSingleTaxFilter('PPN')}
-                            className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
-                              singleTaxFilter === 'PPN'
-                                ? 'bg-blue-900 text-white shadow-2xs font-extrabold'
-                                : 'bg-blue-50 text-blue-900 border border-blue-200 hover:bg-blue-100'
-                            }`}
-                          >
-                            🏷️ PPN 11%
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSingleTaxFilter('NON_PPN')}
-                            className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
-                              singleTaxFilter === 'NON_PPN'
-                                ? 'bg-slate-900 text-white shadow-2xs font-extrabold'
-                                : 'bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200'
-                            }`}
-                          >
-                            📦 Non-PPN
-                          </button>
-                        </div>
-                      </div>
-                      <select
-                        required
-                        value={selectedMedId}
-                        onChange={e => handleSingleMedicineSelect(e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      >
-                        <option value="">-- Pilih Obat dari Katalog --</option>
-                        {medicines
-                          .filter(m => {
-                            if (!m.isActive && m.id !== selectedMedId) return false;
-                            const isMedPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
-                            if (singleTaxFilter === 'PPN') return isMedPpn || m.id === selectedMedId;
-                            if (singleTaxFilter === 'NON_PPN') return !isMedPpn || m.id === selectedMedId;
-                            return true;
-                          })
-                          .map(m => {
-                            const isMedPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
-                            return (
-                              <option key={m.id} value={m.id}>
-                                {m.name} ({m.code}) — {m.category} [{isMedPpn ? 'PPN 11%' : 'Non-PPN'}] | Stok: {m.stock} {m.unit}
-                              </option>
-                            );
-                          })}
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block font-semibold text-slate-700 mb-1">Status Perpajakan Sediaan</label>
-                        <div className={`px-3 py-2.5 rounded-xl text-xs font-extrabold border flex items-center justify-between ${
-                          singleTaxType === 'PPN'
-                            ? 'bg-blue-50 text-blue-900 border-blue-200'
-                            : 'bg-slate-100 text-slate-800 border-slate-300'
-                        }`}>
-                          <span className="flex items-center gap-1.5">
-                            {singleTaxType === 'PPN' ? '🏷️ Faktur PPN 11%' : '📦 Nota Non-PPN'}
-                          </span>
-                          <span className="text-[10px] font-bold text-slate-500">
-                            (Otomatis Master Obat)
-                          </span>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block font-semibold text-slate-700 mb-1">Jumlah Stok Masuk (+)</label>
-                        <input
-                          type="number"
-                          min="1"
-                          required
-                          value={singleAmount}
-                          onChange={e => setSingleAmount(Number(e.target.value))}
-                          className="w-full px-3 py-2.5 rounded-xl bg-white border border-emerald-300 font-black text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block font-semibold text-slate-700 mb-1">HPP Beli Modal (Rp/unit)</label>
-                        <input
-                          type="number"
-                          min="0"
-                          required
-                          value={singlePurchasePrice}
-                          onChange={e => setSinglePurchasePrice(Number(e.target.value))}
-                          className="w-full px-3 py-2.5 rounded-xl bg-white border border-slate-200 font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block font-semibold text-slate-700 mb-1">Harga Jual Obat (Rp/unit)</label>
-                        <input
-                          type="number"
-                          min="0"
-                          required
-                          value={singleSellingPrice}
-                          onChange={e => setSingleSellingPrice(Number(e.target.value))}
-                          className="w-full px-3 py-2.5 rounded-xl bg-white border border-slate-200 font-bold text-indigo-900 focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Single Item Margin Analysis Card */}
-                    {singlePurchasePrice > 0 && singleSellingPrice > 0 && (
-                      <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-500 block">Rincian Perhitungan Margin & Pajak Item</span>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
-                          <div>
-                            <span className="text-slate-400 block text-[9px]">DPP Beli Bersih:</span>
-                            <span className="font-bold text-slate-800">
-                              {formatRupiah(singleTaxType === 'PPN' ? Math.round(singlePurchasePrice / 1.11) : singlePurchasePrice)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 block text-[9px]">PPN Masukan (11%):</span>
-                            <span className="font-bold text-blue-800">
-                              {formatRupiah(singleTaxType === 'PPN' ? Math.round(singlePurchasePrice - singlePurchasePrice / 1.11) : 0)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 block text-[9px]">Laba Kotor / Unit:</span>
-                            <span className="font-extrabold text-emerald-700">
-                              {formatRupiah(singleSellingPrice - singlePurchasePrice)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 block text-[9px]">Margin Laba:</span>
-                            <span className="font-black text-emerald-800">
-                              {singleSellingPrice > 0
-                                ? (Math.round(((singleSellingPrice - singlePurchasePrice) / singleSellingPrice) * 10000) / 100)
-                                : 0}%
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 block text-[9px]">Markup Modal:</span>
-                            <span className="font-bold text-indigo-700">
-                              {singlePurchasePrice > 0
-                                ? (Math.round(((singleSellingPrice - singlePurchasePrice) / singlePurchasePrice) * 10000) / 100)
-                                : 0}%
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 block text-[9px]">Est. Laba Total Batch:</span>
-                            <span className="font-black text-emerald-900">
-                              {formatRupiah((singleSellingPrice - singlePurchasePrice) * singleAmount)}
-                            </span>
-                          </div>
-                        </div>
-
-                        <label className="flex items-center gap-2 text-xs text-slate-700 font-semibold pt-1 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={singleUpdateMaster}
-                            onChange={e => setSingleUpdateMaster(e.target.checked)}
-                            className="rounded text-emerald-600 focus:ring-emerald-500"
-                          />
-                          <span>Update harga modal & harga jual obat ini di Katalog Master Apotek</span>
-                        </label>
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Catatan / Supplier / No Faktur</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Pembelian PBF Kimia Farma / Faktur #FK-8823"
-                        value={singleNote}
-                        onChange={e => setSingleNote(e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs transition-colors"
-                    >
-                      Simpan & Tambahkan Stok
-                    </button>
-                  </form>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB CONTENT 2: LOG & RIWAYAT STOK MASUK */}
-          {restockTab === 'log' && (
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-5">
+          {/* LOG & RIWAYAT STOK MASUK UNIFIED */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                 <div>
                   <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
@@ -2063,6 +1633,22 @@ export const StockInView: React.FC = () => {
                     ) : (
                       filteredRestockHistory.map((sh, idx) => {
                         const isPpn = getHistoryIsPpn(sh);
+                        const med = medicines.find(m => m.id === sh.medicineId);
+                        
+                        const hpp = sh.purchasePrice !== undefined && sh.purchasePrice > 0
+                          ? sh.purchasePrice
+                          : (med?.purchasePrice || (med?.price ? Math.round(med.price * 0.75) : 0));
+                          
+                        const sell = sh.sellingPrice !== undefined && sh.sellingPrice > 0
+                          ? sh.sellingPrice
+                          : (med?.price || 0);
+                          
+                        const margin = sh.marginPct !== undefined && sh.marginPct !== null
+                          ? sh.marginPct
+                          : (med?.marginPct !== undefined && med?.marginPct !== null
+                            ? med.marginPct
+                            : (hpp > 0 ? Math.round(((sell - hpp) / hpp) * 10000) / 100 : 20));
+
                         return (
                           <tr key={`${sh.id}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
                             <td className="py-2.5 px-3">
@@ -2095,25 +1681,24 @@ export const StockInView: React.FC = () => {
                               <span className="font-bold text-slate-900">{sh.newStock}</span>
                             </td>
                             <td className="py-2.5 px-3">
-                              {sh.purchasePrice ? (
+                              {hpp > 0 ? (
                                 <div className="text-[11px]">
-                                  <span className="text-slate-500 block">HPP: <strong>{formatRupiah(sh.purchasePrice)}</strong></span>
-                                  <span className="text-indigo-700 font-bold block">Jual: {formatRupiah(sh.sellingPrice || 0)}</span>
+                                  <span className="text-slate-500 block">HPP: <strong>{formatRupiah(hpp)}</strong></span>
+                                  <span className="text-indigo-700 font-bold block">Jual: {formatRupiah(sell)}</span>
                                 </div>
                               ) : (
-                                <span className="text-slate-400">-</span>
+                                <div className="text-[11px]">
+                                  <span className="text-slate-400 block">HPP: -</span>
+                                  <span className="text-indigo-700 font-bold block">Jual: {formatRupiah(sell)}</span>
+                                </div>
                               )}
                             </td>
                             <td className="py-2.5 px-3 text-center">
-                              {sh.marginPct !== undefined ? (
-                                <span className={`text-[11px] font-black px-2 py-0.5 rounded ${
-                                  sh.marginPct >= 20 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                                }`}>
-                                  {sh.marginPct}%
-                                </span>
-                              ) : (
-                                <span className="text-slate-400">-</span>
-                              )}
+                              <span className={`text-[11px] font-black px-2 py-0.5 rounded ${
+                                margin >= 20 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {margin}%
+                              </span>
                             </td>
                             <td className="py-2.5 px-3 text-slate-600 text-xs">{sh.note || '-'}</td>
                           </tr>
@@ -2124,7 +1709,6 @@ export const StockInView: React.FC = () => {
                 </table>
               </div>
             </div>
-          )}
         </div>
       )}
 
@@ -2477,7 +2061,7 @@ export const StockInView: React.FC = () => {
                               </td>
 
                               <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-700">
-                                {m.stock} {m.unit}
+                                {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}
                               </td>
 
                               <td className="py-2.5 px-3">
@@ -2745,6 +2329,563 @@ export const StockInView: React.FC = () => {
                 Ya, Simpan Penyesuaian
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL: TAMBAH ITEM BARU (+ AUTO MARGIN & BHP) */}
+      {isNewItemModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl p-6 space-y-5 animate-fade-in my-8">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-2xl text-white ${newItemType === 'obat' ? 'bg-emerald-600' : 'bg-purple-600'}`}>
+                  {newItemType === 'obat' ? <PackagePlus className="w-5 h-5" /> : <ShoppingBag className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900">
+                    Tambah {newItemType === 'obat' ? 'Obat Baru' : 'Barang Non-Obat Baru'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Atur data produk baru dan penetapan harga jual kasir.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsNewItemModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateNewItemSubmit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Kode Item *</label>
+                  <input
+                    type="text"
+                    required
+                    value={newItemCode}
+                    onChange={e => setNewItemCode(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Nama Item *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder={newItemType === 'obat' ? 'cth. Amoxicillin 500mg' : 'cth. Sabun Cuci Tangan'}
+                    value={newItemName}
+                    onChange={e => setNewItemName(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Kategori</label>
+                  <select
+                    value={newItemCategory}
+                    onChange={e => setNewItemCategory(e.target.value as MedicineCategory)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {newItemType === 'obat' ? (
+                      <>
+                        <option value="Obat Bebas">Obat Bebas</option>
+                        <option value="Obat Bebas Terbatas">Obat Bebas Terbatas</option>
+                        <option value="Obat Keras">Obat Keras</option>
+                        <option value="Jamu & Herbal">Jamu & Herbal</option>
+                        <option value="Suplemen & Vitamin">Suplemen & Vitamin</option>
+                        <option value="Alat Kesehatan">Alat Kesehatan</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="Barang Umum">Barang Umum</option>
+                        <option value="Perawatan & Kosmetik">Perawatan & Kosmetik</option>
+                        <option value="Makanan & Minuman">Makanan & Minuman</option>
+                        <option value="Lainnya">Lainnya</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Satuan</label>
+                  <select
+                    value={newItemUnit}
+                    onChange={e => setNewItemUnit(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs"
+                  >
+                    <option value="Strip">Strip</option>
+                    <option value="Botol">Botol</option>
+                    <option value="Tube">Tube</option>
+                    <option value="Box">Box</option>
+                    <option value="Tablet">Tablet</option>
+                    <option value="Blister">Blister</option>
+                    <option value="Pcs">Pcs</option>
+                    <option value="Ampul">Ampul</option>
+                    <option value="Sachet">Sachet</option>
+                    <option value="Dus">Dus</option>
+                    <option value="Pack">Pack</option>
+                    <option value="Lusin">Lusin</option>
+                    <option value="Vial">Vial</option>
+                    <option value="Kapsul">Kapsul</option>
+                    <option value="Suppositoria">Suppositoria</option>
+                    <option value="Syringe">Syringe</option>
+                    <option value="Pasang">Pasang</option>
+                    <option value="Set">Set</option>
+                    <option value="Roll">Roll</option>
+                    <option value="Galon">Galon</option>
+                    <option value="Bag">Bag</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Lokasi Rak</label>
+                  <input
+                    type="text"
+                    value={newItemLocation}
+                    onChange={e => setNewItemLocation(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Stok Awal</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={newItemStock}
+                    onChange={e => setNewItemStock(Number(e.target.value))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Stok Minimum Alert</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={newItemMinStock}
+                    onChange={e => setNewItemMinStock(Number(e.target.value))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Tanggal Expired</label>
+                  <input
+                    type="date"
+                    value={newItemExpiredDate}
+                    onChange={e => setNewItemExpiredDate(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* HARGA JUAL KASIR SECTION */}
+              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
+                <h4 className="font-extrabold text-slate-800 text-xs flex items-center gap-2">
+                  <Calculator className="w-4 h-4 text-emerald-600" />
+                  Penetapan Harga Jual Kasir (Rp) *
+                </h4>
+
+                <div>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={newItemSellingPrice}
+                    onChange={e => setNewItemSellingPrice(Number(e.target.value))}
+                    placeholder="cth. 12000"
+                    className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2 justify-between">
+                <label className="flex items-center gap-2 font-bold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newItemIsPpn}
+                    onChange={e => setNewItemIsPpn(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>Faktur Termasuk PPN 11%</span>
+                </label>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsNewItemModalOpen(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs transition-all shadow-md flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    Simpan Item Baru
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL DIALOG INPUT STOK MASUK BARU */}
+      {/* ========================================================================= */}
+      {isRestockModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-100 space-y-5 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className={`p-3 rounded-2xl ${modalItemType === 'obat' ? 'bg-emerald-100 text-emerald-800' : 'bg-purple-100 text-purple-800'}`}>
+                  <PackagePlus className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
+                    Input Stok Masuk Baru ({modalItemType === 'obat' ? 'Sediaan Obat' : 'Non-Obat / Alkes'})
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Form penerimaan stok barang masuk, klasifikasi PPN, dan perhitungan margin laba kotor.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsRestockModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-2 rounded-xl hover:bg-slate-100 transition-colors font-bold text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleRestockModalSubmit} className="space-y-4 text-xs">
+              {/* Type Switcher */}
+              <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalItemType('obat');
+                    const firstMed = medicines.find(m => m.isActive && ((m.itemType || 'obat') === 'obat'));
+                    if (firstMed) {
+                      handleModalMedSelect(firstMed.id);
+                    }
+                  }}
+                  className={`flex-1 py-2 rounded-lg font-extrabold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                    modalItemType === 'obat' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  💊 Sediaan Obat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalItemType('non_obat');
+                    const firstNonMed = medicines.find(m => m.isActive && m.itemType === 'non_obat');
+                    if (firstNonMed) {
+                      handleModalMedSelect(firstNonMed.id);
+                    }
+                  }}
+                  className={`flex-1 py-2 rounded-lg font-extrabold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                    modalItemType === 'non_obat' ? 'bg-purple-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  🛍️ Barang Non-Obat
+                </button>
+              </div>
+
+              {/* Select Item */}
+              <div>
+                <label className="block font-extrabold text-slate-700 mb-1">
+                  Pilih Sediaan {modalItemType === 'obat' ? 'Obat' : 'Non-Obat'} <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  required
+                  value={modalMedId}
+                  onChange={e => handleModalMedSelect(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                >
+                  <option value="">-- Pilih Sediaan Barang --</option>
+                  {medicines
+                    .filter(m => {
+                      if (!m.isActive) return false;
+                      if (modalItemType === 'obat') {
+                        return (m.itemType || 'obat') === 'obat';
+                      } else {
+                        return m.itemType === 'non_obat';
+                      }
+                    })
+                    .map(m => {
+                      const hpp = m.purchasePrice || (m.price > 0 ? Math.round(m.price * 0.75) : 0);
+                      const bhp = m.bhpAmount || 0;
+                      const totalCost = hpp + bhp;
+                      const itemMargin = m.marginPct !== undefined && m.marginPct !== null
+                        ? m.marginPct
+                        : (totalCost > 0 && m.price > 0 ? Math.round(((m.price - totalCost) / totalCost) * 10000) / 100 : 20);
+
+                      return (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.code}) — Margin: {itemMargin}% | Stok: {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+
+              {/* Supplier & Faktur No */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    PBF Distributor / Supplier <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={modalSupplier}
+                    onChange={e => setModalSupplier(e.target.value)}
+                    placeholder="e.g. PBF Kimia Farma / Anugrah Argon"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-semibold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    No. Faktur / Surat Jalan <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={modalFakturNo}
+                    onChange={e => setModalFakturNo(e.target.value)}
+                    placeholder="e.g. FK-2026-0089"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-mono font-bold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Qty, Unit, Expired Date */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Jumlah Masuk (Qty) <span className="text-rose-500">*</span></label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={modalQty}
+                    onChange={e => setModalQty(Math.max(1, Number(e.target.value)))}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-emerald-300 font-black text-emerald-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Satuan</label>
+                  <select
+                    value={modalUnit}
+                    onChange={e => setModalUnit(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                  >
+                    {[
+                      'Strip', 'Botol', 'Tube', 'Box', 'Tablet', 'Blister', 'Pcs',
+                      'Ampul', 'Sachet', 'Dus', 'Pack', 'Lusin', 'Vial',
+                      'Kapsul', 'Suppositoria', 'Syringe', 'Pasang', 'Set', 'Roll', 'Galon', 'Bag'
+                    ].concat(modalUnit && !['Strip', 'Botol', 'Tube', 'Box', 'Tablet', 'Blister', 'Pcs', 'Ampul', 'Sachet', 'Dus', 'Pack', 'Lusin', 'Vial', 'Kapsul', 'Suppositoria', 'Syringe', 'Pasang', 'Set', 'Roll', 'Galon', 'Bag'].includes(modalUnit) ? [modalUnit] : []).map(u => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Tgl Kedaluwarsa (Expired)</label>
+                  <input
+                    type="date"
+                    value={modalExpiredDate}
+                    onChange={e => setModalExpiredDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-semibold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Tax Type & Prices (HPP, BHP, Margin, Harga Jual Auto-Sync) */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <label className="font-extrabold text-slate-800">Status Perpajakan Faktur</label>
+                  <select
+                    value={modalTaxType}
+                    onChange={e => setModalTaxType(e.target.value as 'PPN' | 'NON_PPN')}
+                    className="bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-extrabold text-xs text-indigo-950 focus:outline-none focus:border-indigo-500 shadow-2xs cursor-pointer"
+                  >
+                    <option value="PPN">🏷️ Faktur PPN 11% Included</option>
+                    <option value="NON_PPN">📦 Nota Non-PPN (Bebas Pajak)</option>
+                  </select>
+                </div>
+
+                {/* 4 Inputs Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      HPP Beli Modal (Rp/Unit) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={modalPurchasePrice}
+                      onChange={e => handleModalPurchasePriceChange(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 font-bold text-slate-900 focus:outline-none focus:border-emerald-500 text-xs"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                      {formatRupiah(modalPurchasePrice)}
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Bahan Habis Pakai / BHP (Rp)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={modalBhpAmount}
+                      onChange={e => handleModalBhpAmountChange(Number(e.target.value))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 font-bold text-amber-900 focus:outline-none focus:border-amber-500 text-xs"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                      {formatRupiah(modalBhpAmount)}
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                      <span>Margin Laba (%)</span>
+                      <span className="text-[9px] bg-emerald-100 text-emerald-800 font-extrabold px-1.5 py-0.2 rounded">Auto</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      required
+                      value={modalMarginPct}
+                      onChange={e => handleModalMarginPctChange(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-emerald-400 font-black text-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 text-xs"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block font-medium">
+                      Margin {modalMarginPct}%
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                      <span>Harga Jual (Rp/Unit)</span>
+                      <span className="text-[9px] bg-indigo-100 text-indigo-800 font-extrabold px-1.5 py-0.2 rounded">Sinkron</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={modalSellingPrice}
+                      onChange={e => handleModalSellingPriceChange(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-indigo-300 font-extrabold text-indigo-900 focus:outline-none focus:border-indigo-500 text-xs"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                      {formatRupiah(modalSellingPrice)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Live Margin Calculation Preview */}
+                {(() => {
+                  const hpp = modalPurchasePrice;
+                  const bhp = modalBhpAmount;
+                  const totalCost = hpp + bhp;
+                  const sell = modalSellingPrice;
+                  const isPpn = modalTaxType === 'PPN';
+                  const dppBeli = isPpn ? Math.round(hpp / 1.11) : hpp;
+                  const ppnVal = isPpn ? hpp - dppBeli : 0;
+                  const profitUnit = sell - totalCost;
+                  const marginPct = sell > 0 ? Math.round((profitUnit / sell) * 10000) / 100 : 0;
+                  const markupPct = totalCost > 0 ? Math.round((profitUnit / totalCost) * 10000) / 100 : 0;
+                  const totalProfitBatch = profitUnit * modalQty;
+
+                  return (
+                    <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-3.5 rounded-xl space-y-1.5 border border-slate-800 shadow-inner">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-300">
+                        <span>⚡ Perhitungan Modal & Harga Jual Auto-Sinkron:</span>
+                        <span className="text-amber-300 font-extrabold">Est. Total Profit Batch: {formatRupiah(totalProfitBatch)}</span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] pt-1 border-t border-slate-800">
+                        <div>
+                          <span className="text-slate-400 block text-[9px]">Total Modal (HPP+BHP):</span>
+                          <span className="font-extrabold text-amber-300">{formatRupiah(totalCost)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[9px]">DPP Beli (Excl PPN):</span>
+                          <span className="font-mono text-white">{formatRupiah(dppBeli)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[9px]">PPN Masukan (11%):</span>
+                          <span className="font-mono text-blue-300">{formatRupiah(ppnVal)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[9px]">Margin Laba:</span>
+                          <span className="font-black text-emerald-400">{marginPct}%</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[9px]">Profit per Unit:</span>
+                          <span className={`font-extrabold ${profitUnit >= 0 ? 'text-emerald-300' : 'text-rose-400'}`}>
+                            {formatRupiah(profitUnit)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Note */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Catatan Tambahan Nota (Opsional)</label>
+                <input
+                  type="text"
+                  value={modalNote}
+                  onChange={e => setModalNote(e.target.value)}
+                  placeholder="e.g. Pembelian rutin PBF Kimia Farma"
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Modal Action Footer */}
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsRestockModalOpen(false)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Simpan & Tambahkan Stok
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

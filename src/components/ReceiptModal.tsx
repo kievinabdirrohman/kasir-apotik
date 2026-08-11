@@ -110,7 +110,8 @@ export const ReceiptModal: React.FC = () => {
                   </div>
                   <div className="flex justify-between text-[11px] text-slate-600">
                     <span>
-                      {item.qty} {item.unit} x {formatRupiah(item.price)}
+                      {item.qty} {item.unit}
+                      {(item.unit === 'Lusin' || (item.unitMultiplier && item.unitMultiplier > 1)) ? ` (${item.qty * (item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1))} pcs)` : ''} x {formatRupiah(item.price)}
                     </span>
                     <span className="font-medium text-slate-900">{formatRupiah(item.subtotal)}</span>
                   </div>
@@ -139,6 +140,24 @@ export const ReceiptModal: React.FC = () => {
 
             {/* Calculations */}
             <div className="space-y-1.5 pt-1 text-[11px]">
+              <div className="flex justify-between text-slate-700 font-semibold pb-1 border-b border-dashed border-slate-200">
+                <span>Subtotal Produk:</span>
+                <span className="font-bold text-slate-900">
+                  {formatRupiah(lastTransaction.items.reduce((sum, item) => sum + item.subtotal, 0))}
+                </span>
+              </div>
+
+              {lastTransaction.isPrescription && (
+                <div className="flex justify-between text-indigo-900 pb-1 border-b border-dashed border-slate-200">
+                  <span>Jasa & Racikan Resep:</span>
+                  <span className="font-bold">
+                    +{formatRupiah(
+                      (lastTransaction.prescriptionMarkupAmount ?? 0) + (lastTransaction.prescriptionRacikanFee ?? 0)
+                    )}
+                  </span>
+                </div>
+              )}
+
               {lastTransaction.taxType === 'PPN' && (
                 <div className="space-y-1 pb-1.5 border-b border-dashed border-slate-200">
                   <div className="flex justify-between text-slate-600">

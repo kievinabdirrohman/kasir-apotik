@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { getDaysUntilExpired, getExpiredStatus } from '../utils/formatters';
+import { getDaysUntilExpired, getExpiredStatus, formatStockDisplay } from '../utils/formatters';
 import { Bell, AlertTriangle, Clock, AlertCircle, ChevronRight, Check } from 'lucide-react';
 
 export const NotificationCenter: React.FC = () => {
@@ -152,7 +152,7 @@ export const NotificationCenter: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-slate-500 text-[11px] mt-0.5">
-                          Tgl Expired: {med.expiredDate} • Stok: {med.stock} {med.unit}
+                          Tgl Expired: {med.expiredDate} • Stok: {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
                         </p>
                       </div>
                       <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-600 shrink-0 self-center" />
@@ -177,11 +177,11 @@ export const NotificationCenter: React.FC = () => {
                       <div className="flex items-center justify-between gap-1">
                         <span className="font-semibold text-slate-900 truncate">{med.name}</span>
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 shrink-0">
-                          Stok: {med.stock}
+                          Stok: {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
                         </span>
                       </div>
                       <p className="text-slate-500 text-[11px] mt-0.5">
-                        Sisa {med.stock} {med.unit} (Min: {med.minStock})
+                        Sisa {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)} (Min: {med.minStock})
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-600 shrink-0 self-center" />

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { formatRupiah, formatDate, formatDateTime, getDaysUntilExpired, getExpiredStatus, getWIBDateString, isPpnTransaction } from '../utils/formatters';
+import { formatRupiah, formatDate, formatDateTime, getDaysUntilExpired, getExpiredStatus, getWIBDateString, isPpnTransaction, formatStockDisplay } from '../utils/formatters';
 import {
   FileSpreadsheet,
   Printer,
@@ -2045,7 +2045,7 @@ export const ReportsView: React.FC = () => {
                       </div>
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-slate-500">Kategori: <strong>{m.category}</strong></span>
-                        <span className="font-bold text-slate-900">Stok: {m.stock} {m.unit} (Min: {m.minStock})</span>
+                        <span className="font-bold text-slate-900">Stok: {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)} (Min: {m.minStock})</span>
                       </div>
                       <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
                         <span className="font-extrabold text-emerald-700">Harga: {formatRupiah(m.price)}</span>
@@ -2094,7 +2094,7 @@ export const ReportsView: React.FC = () => {
                           </td>
                           <td className="py-2.5 px-4 text-slate-600">{m.category}</td>
                           <td className="py-2.5 px-4 font-mono font-bold text-slate-900">
-                            {m.stock} {m.unit}
+                            {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}
                           </td>
                           <td className="py-2.5 px-4 font-mono text-slate-500">{m.minStock} {m.unit}</td>
                           <td className="py-2.5 px-4">
@@ -2202,7 +2202,7 @@ export const ReportsView: React.FC = () => {
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-slate-600">
                         <span>Exp: <strong>{formatDate(m.expiredDate)}</strong></span>
-                        <span>Stok: <strong>{m.stock} {m.unit}</strong></span>
+                        <span>Stok: <strong>{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</strong></span>
                       </div>
                       <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
                         <span className="font-extrabold text-slate-800">Nilai: {formatRupiah(m.stock * m.price)}</span>
@@ -2254,7 +2254,7 @@ export const ReportsView: React.FC = () => {
                               {statusInfo.label}
                             </span>
                           </td>
-                          <td className="py-2.5 px-4 font-bold text-slate-900">{m.stock} {m.unit}</td>
+                          <td className="py-2.5 px-4 font-bold text-slate-900">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</td>
                           <td className="py-2.5 px-4 text-right font-extrabold text-slate-800">{formatRupiah(m.stock * m.price)}</td>
                           <td className="py-2.5 px-4 text-center">
                             <button
@@ -2855,7 +2855,7 @@ export const ReportsView: React.FC = () => {
                       <h3 className="font-extrabold text-lg text-white">{selectedMedicineDetail.name}</h3>
                     </div>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Kategori: {selectedMedicineDetail.category} • Stok Fisik: <strong className="text-emerald-300">{selectedMedicineDetail.stock} {selectedMedicineDetail.unit}</strong> (Batas Min: {selectedMedicineDetail.minStock})
+                      Kategori: {selectedMedicineDetail.category} • Stok Fisik: <strong className="text-emerald-300">{formatStockDisplay(selectedMedicineDetail.stock, selectedMedicineDetail.unit, selectedMedicineDetail.unitMultiplier)}</strong> (Batas Min: {selectedMedicineDetail.minStock})
                     </p>
                   </div>
                 </div>
@@ -3048,7 +3048,7 @@ export const ReportsView: React.FC = () => {
                   </div>
                   <div className="p-3.5 bg-white rounded-xl border border-slate-200">
                     <span className="text-[10px] font-bold text-slate-400 block uppercase">Stok Tersedia</span>
-                    <span className="text-xl font-black text-slate-900 block mt-0.5">{selectedExpiredDetail.stock} {selectedExpiredDetail.unit}</span>
+                    <span className="text-xl font-black text-slate-900 block mt-0.5">{formatStockDisplay(selectedExpiredDetail.stock, selectedExpiredDetail.unit, selectedExpiredDetail.unitMultiplier)}</span>
                   </div>
                   <div className="p-3.5 bg-white rounded-xl border border-slate-200">
                     <span className="text-[10px] font-bold text-rose-700 block uppercase">Nilai Kerugian / Sediaan</span>

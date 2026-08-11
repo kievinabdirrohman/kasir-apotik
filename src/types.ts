@@ -30,10 +30,14 @@ export interface Medicine {
   purchasePrice?: number;
   stock: number;
   minStock: number;
-  unit: string; // e.g. Strip, Tablet, Botol, Tube, Box, Pcs
+  unit: string; // e.g. Strip, Tablet, Botol, Tube, Box, Pcs, Lusin
+  unitMultiplier?: number; // Multiplier multiplier per unit (e.g. 12 for Lusin)
   expiredDate: string; // YYYY-MM-DD
   isActive: boolean;
   location?: string; // Rak 1A, Lemari Es, dll
+  itemType?: 'obat' | 'non_obat'; // Tipe Item: Obat vs Non-Obat
+  marginPct?: number; // Persentase Margin (%)
+  bhpAmount?: number; // Bahan Habis Pakai / Biaya Ops Tambahan
   // PPN & Pricing Structure
   ppnRate?: number; // e.g. 11 for 11% PPN
   isPpnIncluded?: boolean; // true if price already includes PPN
@@ -55,12 +59,14 @@ export interface StockHistory {
   date: string;
   note: string;
   user: string;
+  itemType?: 'obat' | 'non_obat';
   // Optional tax & pricing snapshot for stock movements
   taxType?: 'PPN' | 'NON_PPN';
   purchasePrice?: number;
   sellingPrice?: number;
   ppnAmount?: number;
   marginPct?: number;
+  bhpAmount?: number;
 }
 
 export interface Customer {
@@ -94,6 +100,9 @@ export interface TransactionItem {
   subtotal: number;
   isPpn?: boolean;
   ppnRate?: number;
+  itemType?: 'obat' | 'non_obat';
+  unitMultiplier?: number; // e.g. 12 for Lusin
+  purchasePrice?: number; // HPP per unit
 }
 
 export interface Transaction {
@@ -108,7 +117,11 @@ export interface Transaction {
   prescriptionMarkupRate?: number;
   prescriptionMarkupAmount?: number;
   prescriptionRacikanFee?: number;
-  costAmount?: number; // Total HPP / Modal Obat
+  costAmount?: number; // Total HPP / Modal
+  obatTotalAmount?: number; // Omset Obat
+  nonObatTotalAmount?: number; // Omset Non-Obat
+  obatCostAmount?: number; // HPP Obat
+  nonObatCostAmount?: number; // HPP Non-Obat
   cashierName: string;
   cashierUsername: string;
   items: TransactionItem[];

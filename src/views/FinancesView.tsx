@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { formatRupiah, formatDateTime, formatDate, getWIBDateString } from '../utils/formatters';
+import { formatRupiah, formatDateTime, formatDate, getWIBDateString, formatStockDisplay } from '../utils/formatters';
 import {
   WalletCards,
   TrendingUp,
@@ -110,6 +110,63 @@ export const FinancesView: React.FC = () => {
     }
   };
 
+  // Helper functions for dual-track split calculation (Obat vs Non-Obat)
+  const getTrxObatTotal = (t: any) => {
+    if (t.obatTotalAmount !== undefined) return t.obatTotalAmount;
+    return t.items
+      .filter((i: any) => {
+        const med = medicines.find(m => m.id === i.medicineId);
+        return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
+      })
+      .reduce((sum: number, i: any) => sum + i.subtotal, 0);
+  };
+
+  const getTrxNonObatTotal = (t: any) => {
+    if (t.nonObatTotalAmount !== undefined) return t.nonObatTotalAmount;
+    return t.items
+      .filter((i: any) => {
+        const med = medicines.find(m => m.id === i.medicineId);
+        return (i.itemType || med?.itemType) === 'non_obat';
+      })
+      .reduce((sum: number, i: any) => sum + i.subtotal, 0);
+  };
+
+  const getTrxObatCost = (t: any) => {
+    if (t.obatCostAmount !== undefined) return t.obatCostAmount;
+    return t.items
+      .filter((i: any) => {
+        const med = medicines.find(m => m.id === i.medicineId);
+        return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
+      })
+      .reduce((sum: number, i: any) => {
+        const med = medicines.find(m => m.id === i.medicineId);
+        const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
+        const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
+        const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
+        const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
+        const qtyPcs = i.qty * itemMult;
+        return sum + Math.round(costPerPcs * qtyPcs);
+      }, 0);
+  };
+
+  const getTrxNonObatCost = (t: any) => {
+    if (t.nonObatCostAmount !== undefined) return t.nonObatCostAmount;
+    return t.items
+      .filter((i: any) => {
+        const med = medicines.find(m => m.id === i.medicineId);
+        return (i.itemType || med?.itemType) === 'non_obat';
+      })
+      .reduce((sum: number, i: any) => {
+        const med = medicines.find(m => m.id === i.medicineId);
+        const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
+        const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
+        const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
+        const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
+        const qtyPcs = i.qty * itemMult;
+        return sum + Math.round(costPerPcs * qtyPcs);
+      }, 0);
+  };
+
   // --- BALANCE SHEET (NERACA KEUANGAN) COMPUTATION ---
   const balanceSheetData = useMemo(() => {
     // 4. Ekuitas / Modal
@@ -120,43 +177,46 @@ export const FinancesView: React.FC = () => {
 
     const modalDisetor = baseInitialModal + additionalCapital;
 
-    // Retained Earnings / Cumulative Net Profit from operations (Sales - HPP - Expenses + Other Income)
-    const totalSales = transactions
-      .filter(t => t.status === 'Selesai')
-      .reduce((sum, t) => sum + t.totalAmount, 0);
+    const completedTransactions = transactions.filter(t => t.status === 'Selesai');
 
-    const totalHPP = transactions
-      .filter(t => t.status === 'Selesai')
-      .reduce((sum, t) => {
-        const trxCost = t.costAmount !== undefined && t.costAmount > 0 
-          ? t.costAmount 
-          : t.items.reduce((itemSum, item) => {
-              const med = medicines.find(m => m.id === item.medicineId);
-              const purPrice = med?.purchasePrice || Math.round(item.price * 0.7);
-              return itemSum + purPrice * item.qty;
-            }, 0);
-        return sum + trxCost;
-      }, 0);
+    const totalSalesObat = completedTransactions.reduce((sum, t) => sum + getTrxObatTotal(t), 0);
+    const totalSalesNonObat = completedTransactions.reduce((sum, t) => sum + getTrxNonObatTotal(t), 0);
+    const totalSalesCombined = totalSalesObat + totalSalesNonObat;
+
+    const totalHPPObat = completedTransactions.reduce((sum, t) => sum + getTrxObatCost(t), 0);
+    const totalHPPNonObat = completedTransactions.reduce((sum, t) => sum + getTrxNonObatCost(t), 0);
+    const totalHPPCombined = totalHPPObat + totalHPPNonObat;
+
+    // EXCLUDE Non-Obat sales & inventory from main Balance Sheet (Requirement 5)
+    const totalSalesNeraca = totalSalesObat;
 
     const totalExpenses = cashFlows
       .filter(cf => cf.type === 'Pengeluaran')
       .reduce((sum, cf) => sum + cf.amount, 0);
 
-    const otherIncome = cashFlows
-      .filter(cf => cf.type === 'Pemasukan' && cf.category !== 'Suntikan Modal')
-      .reduce((sum, cf) => sum + cf.amount, 0);
-
-    // 2. Persediaan Obat (Valuasi Stok)
-    const totalValuasiStok = medicines.reduce((sum, m) => {
-      return sum + (m.stock * m.purchasePrice);
-    }, 0);
-
-    // 1. Kas & Setara Kas murni dari data valid (penjualan POS + pemasukan kas - pengeluaran kas)
     const totalPemasukanLain = cashFlows
       .filter(cf => cf.type === 'Pemasukan')
       .reduce((sum, cf) => sum + cf.amount, 0);
 
-    const saldoKas = Math.max(0, totalSales + totalPemasukanLain - totalExpenses);
+    // 2. Persediaan Obat (Valuasi Stok Obat Saja)
+    const totalValuasiStok = medicines
+      .filter(m => (m.itemType || 'obat') === 'obat')
+      .reduce((sum, m) => {
+        const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
+        const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
+        return sum + Math.round(m.stock * costPerPcs);
+      }, 0);
+
+    const totalValuasiStokNonObat = medicines
+      .filter(m => m.itemType === 'non_obat')
+      .reduce((sum, m) => {
+        const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
+        const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
+        return sum + Math.round(m.stock * costPerPcs);
+      }, 0);
+
+    // 1. Kas & Setara Kas murni dari Penjualan Obat + Pemasukan - Pengeluaran
+    const saldoKas = Math.max(0, totalSalesNeraca + totalPemasukanLain - totalExpenses);
     const totalAsetLancar = saldoKas + totalValuasiStok;
     const totalAset = totalAsetLancar;
 
@@ -169,6 +229,13 @@ export const FinancesView: React.FC = () => {
     return {
       saldoKas,
       totalValuasiStok,
+      totalValuasiStokNonObat,
+      totalSalesObat,
+      totalSalesNonObat,
+      totalSalesCombined,
+      totalHPPObat,
+      totalHPPNonObat,
+      totalHPPCombined,
       totalAsetLancar,
       totalAset,
       modalDisetor,
@@ -232,20 +299,73 @@ export const FinancesView: React.FC = () => {
     });
 
     // Calculate Pendapatan (Penjualan)
-    const totalPenjualan = filteredTransactions.reduce((sum, trx) => sum + trx.totalAmount, 0);
-    
-    // Calculate HPP
-    const totalHPP = filteredTransactions.reduce((sum, trx) => {
-      const trxCost = trx.costAmount !== undefined && trx.costAmount > 0 
-        ? trx.costAmount 
-        : trx.items.reduce((itemSum, item) => {
-            const med = medicines.find(m => m.id === item.medicineId);
-            const purPrice = med?.purchasePrice || Math.round(item.price * 0.7);
-            return itemSum + purPrice * item.qty;
-          }, 0);
-      return sum + trxCost;
+    const totalPenjualanObat = filteredTransactions.reduce((sum, trx) => {
+      if (trx.obatTotalAmount !== undefined) return sum + trx.obatTotalAmount;
+      const obatVal = trx.items
+        .filter((i: any) => {
+          const med = medicines.find(m => m.id === i.medicineId);
+          return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
+        })
+        .reduce((s: number, i: any) => s + i.subtotal, 0);
+      return sum + obatVal;
     }, 0);
 
+    const totalPenjualanNonObat = filteredTransactions.reduce((sum, trx) => {
+      if (trx.nonObatTotalAmount !== undefined) return sum + trx.nonObatTotalAmount;
+      const nonObatVal = trx.items
+        .filter((i: any) => {
+          const med = medicines.find(m => m.id === i.medicineId);
+          return (i.itemType || med?.itemType) === 'non_obat';
+        })
+        .reduce((s: number, i: any) => s + i.subtotal, 0);
+      return sum + nonObatVal;
+    }, 0);
+
+    const totalPenjualan = totalPenjualanObat + totalPenjualanNonObat;
+    
+    // Calculate HPP
+    const totalHPPObat = filteredTransactions.reduce((sum, trx) => {
+      if (trx.obatCostAmount !== undefined && trx.obatCostAmount > 0) return sum + trx.obatCostAmount;
+      const obatCost = trx.items
+        .filter((i: any) => {
+          const med = medicines.find(m => m.id === i.medicineId);
+          return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
+        })
+        .reduce((s: number, i: any) => {
+          const med = medicines.find(m => m.id === i.medicineId);
+          const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
+          const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
+          const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
+          const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
+          const qtyPcs = i.qty * itemMult;
+          return s + Math.round(costPerPcs * qtyPcs);
+        }, 0);
+      return sum + obatCost;
+    }, 0);
+
+    const totalHPPNonObat = filteredTransactions.reduce((sum, trx) => {
+      if (trx.nonObatCostAmount !== undefined && trx.nonObatCostAmount > 0) return sum + trx.nonObatCostAmount;
+      const nonObatCost = trx.items
+        .filter((i: any) => {
+          const med = medicines.find(m => m.id === i.medicineId);
+          return (i.itemType || med?.itemType) === 'non_obat';
+        })
+        .reduce((s: number, i: any) => {
+          const med = medicines.find(m => m.id === i.medicineId);
+          const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
+          const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
+          const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
+          const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
+          const qtyPcs = i.qty * itemMult;
+          return s + Math.round(costPerPcs * qtyPcs);
+        }, 0);
+      return sum + nonObatCost;
+    }, 0);
+
+    const totalHPP = totalHPPObat + totalHPPNonObat;
+
+    const labaKotorObat = totalPenjualanObat - totalHPPObat;
+    const labaKotorNonObat = totalPenjualanNonObat - totalHPPNonObat;
     const labaKotor = totalPenjualan - totalHPP;
 
     // Filter Expenses (Pengeluaran Operasional)
@@ -295,9 +415,13 @@ export const FinancesView: React.FC = () => {
       trx.items.forEach(item => {
         const med = medicines.find(m => m.id === item.medicineId);
         const name = item.medicineName || med?.name || 'Obat';
-        const costPrice = med?.purchasePrice || Math.round(item.price * 0.7);
+        const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
+        const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
+        const costPrice = item.purchasePrice ?? med?.purchasePrice ?? Math.round(item.price * 0.7);
+        const costPerPcs = masterMult > 1 ? costPrice / masterMult : costPrice;
+        const qtyPcs = item.qty * itemMult;
         const itemSales = item.subtotal;
-        const itemHPP = costPrice * item.qty;
+        const itemHPP = Math.round(costPerPcs * qtyPcs);
         const itemProfit = itemSales - itemHPP;
 
         if (!medProfitMap[item.medicineId]) {
@@ -322,8 +446,14 @@ export const FinancesView: React.FC = () => {
       suntikanModalInPeriod,
       medicineProfits,
       totalPenjualan,
+      totalPenjualanObat,
+      totalPenjualanNonObat,
       totalHPP,
+      totalHPPObat,
+      totalHPPNonObat,
       labaKotor,
+      labaKotorObat,
+      labaKotorNonObat,
       pengeluaranLainnya: totalBebanOperasional,
       totalBebanOperasional,
       pemasukanLainnya,
@@ -1320,14 +1450,14 @@ export const FinancesView: React.FC = () => {
               <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4">
                 <h4 className="font-extrabold text-emerald-900 text-sm mb-1">Formula & Metode Perhitungan:</h4>
                 <p className="text-xs text-emerald-800 font-mono bg-emerald-100/80 p-2 rounded-xl mb-2">
-                  {selectedBalanceDetail === 'kas' && 'Saldo Kas = (Total Penjualan POS Selesai) + (Pemasukan Arus Kas Lainnya) - (Pengeluaran Arus Kas Lainnya)'}
-                  {selectedBalanceDetail === 'persediaan' && 'Valuasi Persediaan = Sum(Stok Fisik Obat x Harga Beli / HPP per unit)'}
+                  {selectedBalanceDetail === 'kas' && 'Saldo Kas = (Total Penjualan Obat POS Selesai) + (Pemasukan Arus Kas Lainnya) - (Pengeluaran Arus Kas Lainnya)'}
+                  {selectedBalanceDetail === 'persediaan' && 'Valuasi Persediaan = Sum(Stok Fisik Obat Saja x Harga Beli / HPP per unit)'}
                   {selectedBalanceDetail === 'modal' && 'Modal Disetor = Modal Awal Standar (Rp 50.000.000) + Akumulasi Suntikan Modal via Log Arus Kas'}
-                  {selectedBalanceDetail === 'laba' && 'Laba Ditahan = Total Aset (Kas + Stok) - Total Liabilitas (Utang) - Total Modal Disetor'}
+                  {selectedBalanceDetail === 'laba' && 'Laba Ditahan = Total Aset (Kas + Stok Obat) - Total Liabilitas (Utang) - Total Modal Disetor'}
                 </p>
                 <p className="text-xs text-emerald-900 leading-relaxed">
-                  {selectedBalanceDetail === 'kas' && 'Semua transaksi penjualan apotek yang berstatus "Selesai" otomatis masuk ke kas kasir, ditambah pemasukan kas operasional dan dikurangi pengeluaran operasional secara real-time.'}
-                  {selectedBalanceDetail === 'persediaan' && 'Nilai persediaan dihitung berdasarkan harga beli (HPP) dikalikan dengan stok fisik aktif di setiap data obat apotek.'}
+                  {selectedBalanceDetail === 'kas' && 'Hanya transaksi penjualan obat apotek yang berstatus "Selesai" yang masuk ke kas neraca (penjualan non-obat dikecualikan dari neraca keuangan), ditambah pemasukan kas operasional dan dikurangi pengeluaran operasional.'}
+                  {selectedBalanceDetail === 'persediaan' && 'Nilai persediaan neraca murni dihitung berdasarkan harga beli (HPP) dikalikan dengan stok fisik aktif sediaan obat (barang non-obat dikecualikan dari neraca keuangan).'}
                   {selectedBalanceDetail === 'modal' && 'Modal disetor mencakup modal pendirian awal apotek serta penambahan modal dari catatan arus kas bertipe pemasukan dengan kategori "Suntikan Modal".'}
                   {selectedBalanceDetail === 'laba' && 'Laba ditahan atau berjalan merepresentasikan akumulasi surplus kekayaan bersih apotek yang diperoleh dari selisih seluruh aset dikurangi kewajiban dan modal.'}
                 </p>
@@ -1337,24 +1467,29 @@ export const FinancesView: React.FC = () => {
               {selectedBalanceDetail === 'kas' && (
                 <div className="space-y-4">
                   <div>
-                    <h5 className="font-bold text-slate-800 text-sm mb-2">1. Sumber dari Penjualan POS Selesai ({transactions.filter(t => t.status === 'Selesai').length} transaksi)</h5>
+                    <h5 className="font-bold text-slate-800 text-sm mb-2">
+                      1. Sumber dari Penjualan POS Obat Selesai ({transactions.filter(t => t.status === 'Selesai' && getTrxObatTotal(t) > 0).length} transaksi - non-obat dikecualikan)
+                    </h5>
                     <div className="border border-slate-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-slate-50 text-slate-600 sticky top-0 border-b border-slate-200">
                           <tr>
                             <th className="py-2 px-3 font-bold">No. Transaksi / Waktu</th>
                             <th className="py-2 px-3 font-bold">Pelanggan</th>
-                            <th className="py-2 px-3 font-bold text-right">Jumlah (Rp)</th>
+                            <th className="py-2 px-3 font-bold text-right">Penjualan Obat (Rp)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {transactions.filter(t => t.status === 'Selesai').map(t => (
-                            <tr key={t.id} className="hover:bg-slate-50">
-                              <td className="py-2 px-3 font-medium text-slate-700">{t.id} - {formatDateTime(t.date)}</td>
-                              <td className="py-2 px-3 text-slate-600">{t.customerName || 'Umum'}</td>
-                              <td className="py-2 px-3 text-right font-extrabold text-emerald-600">+{formatRupiah(t.totalAmount)}</td>
-                            </tr>
-                          ))}
+                          {transactions.filter(t => t.status === 'Selesai' && getTrxObatTotal(t) > 0).map(t => {
+                            const obatTotal = getTrxObatTotal(t);
+                            return (
+                              <tr key={t.id} className="hover:bg-slate-50">
+                                <td className="py-2 px-3 font-medium text-slate-700">{t.id} - {formatDateTime(t.date)}</td>
+                                <td className="py-2 px-3 text-slate-600">{t.customerName || 'Umum'}</td>
+                                <td className="py-2 px-3 text-right font-extrabold text-emerald-600">+{formatRupiah(obatTotal)}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1396,7 +1531,9 @@ export const FinancesView: React.FC = () => {
 
               {selectedBalanceDetail === 'persediaan' && (
                 <div>
-                  <h5 className="font-bold text-slate-800 text-sm mb-2">Daftar Sediaan Obat & Valuasi Stok ({medicines.length} Item)</h5>
+                  <h5 className="font-bold text-slate-800 text-sm mb-2">
+                    Daftar Sediaan Obat & Valuasi Stok ({medicines.filter(m => (m.itemType || 'obat') === 'obat').length} Item - non-obat dikecualikan)
+                  </h5>
                   <div className="border border-slate-200 rounded-xl overflow-hidden max-h-80 overflow-y-auto">
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-600 sticky top-0 border-b border-slate-200">
@@ -1409,13 +1546,15 @@ export const FinancesView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {medicines.map(m => {
-                          const val = m.stock * m.purchasePrice;
+                        {medicines.filter(m => (m.itemType || 'obat') === 'obat').map(m => {
+                          const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
+                          const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
+                          const val = Math.round(m.stock * costPerPcs);
                           return (
                             <tr key={m.id} className="hover:bg-slate-50">
                               <td className="py-2.5 px-3 font-bold text-slate-800">{m.name}</td>
                               <td className="py-2.5 px-3 text-slate-600">{m.category}</td>
-                              <td className="py-2.5 px-3 text-center font-semibold text-slate-700">{m.stock} {m.unit}</td>
+                              <td className="py-2.5 px-3 text-center font-semibold text-slate-700">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</td>
                               <td className="py-2.5 px-3 text-right text-slate-600">{formatRupiah(m.purchasePrice)}</td>
                               <td className="py-2.5 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(val)}</td>
                             </tr>
@@ -1667,8 +1806,12 @@ export const FinancesView: React.FC = () => {
                                         <div className="divide-y divide-slate-100">
                                           {trx.items.map((it, idx) => {
                                             const med = medicines.find(m => m.id === it.medicineId);
-                                            const purPrice = med?.purchasePrice || Math.round(it.price * 0.7);
-                                            const lineHPP = purPrice * it.qty;
+                                            const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
+                                            const itemMult = it.unit === 'Lusin' ? 12 : (it.unitMultiplier || masterMult);
+                                            const purPrice = it.purchasePrice ?? med?.purchasePrice ?? Math.round(it.price * 0.7);
+                                            const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
+                                            const qtyPcs = it.qty * itemMult;
+                                            const lineHPP = Math.round(costPerPcs * qtyPcs);
                                             const lineProfit = it.subtotal - lineHPP;
                                             return (
                                               <div key={idx} className="py-1.5 flex justify-between items-center text-xs">

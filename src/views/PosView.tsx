@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Medicine, TransactionItem, Customer, Doctor, MedicineCategory, Transaction } from '../types';
-import { formatRupiah, getExpiredStatus, formatDateTime } from '../utils/formatters';
+import { formatRupiah, getExpiredStatus, formatDateTime, formatStockDisplay as formatStockDisplayUtil } from '../utils/formatters';
 import {
   ShoppingCart,
   Search,
@@ -73,6 +73,11 @@ export const PosView: React.FC = () => {
   // Helper to check if a medicine is subject to PPN 11%
   const isMedicinePpn = (med: Medicine): boolean => {
     return (med.isPpnIncluded ?? true) && (med.ppnRate ?? 11) > 0;
+  };
+
+  // Helper to format stock display with proper unit and base pcs conversion
+  const formatStockDisplay = (med: Medicine): string => {
+    return formatStockDisplayUtil(med.stock, med.unit, med.unitMultiplier);
   };
 
   // Transaction Form State
@@ -183,25 +188,44 @@ export const PosView: React.FC = () => {
   const processAddToCart = (med: Medicine) => {
     const isPpn = isMedicinePpn(med);
     const itemPpnRate = isPpn ? (med.ppnRate ?? 11) : 0;
+    const multiplier = med.unit === 'Lusin' ? 12 : (med.unitMultiplier || 1);
 
     setCart(prev => {
       const existing = prev.find(item => item.medicineId === med.id);
       if (existing) {
-        if (existing.qty + 1 > med.stock) {
+        const nextQty = existing.qty + 1;
+        const totalNeededPcs = nextQty * multiplier;
+        if (totalNeededPcs > med.stock) {
+          const currentCartPcs = existing.qty * multiplier;
+          const availableStockStr = formatStockDisplay(med);
           setScanAlert({
             type: 'stock_exceeded',
             barcode: med.code,
             medicine: med,
-            message: `Jumlah sediaan "${med.name}" di keranjang (${existing.qty} ${med.unit}) sudah mencapai batas maksimum stok apotek (${med.stock} ${med.unit}).`,
+            message: `Jumlah sediaan "${med.name}" di keranjang (${existing.qty} ${med.unit}${multiplier > 1 ? ` = ${currentCartPcs} pcs` : ''}) jika ditambah 1 ${med.unit} lagi (${totalNeededPcs} pcs) melebihi stok yang tersedia (${availableStockStr}).`,
           });
           return prev;
         }
-        return prev.map(item =>
-          item.medicineId === med.id
-            ? { ...item, qty: item.qty + 1, subtotal: (item.qty + 1) * item.price }
-            : item
-        );
+        return prev.map(item => {
+          if (item.medicineId === med.id) {
+            const nextQty = item.qty + 1;
+            const mult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || multiplier);
+            return { ...item, qty: nextQty, subtotal: nextQty * mult * item.price, unitMultiplier: mult };
+          }
+          return item;
+        });
       } else {
+        const totalNeededPcs = 1 * multiplier;
+        if (totalNeededPcs > med.stock) {
+          const availableStockStr = formatStockDisplay(med);
+          setScanAlert({
+            type: 'stock_exceeded',
+            barcode: med.code,
+            medicine: med,
+            message: `Stok sediaan "${med.name}" (${availableStockStr}) tidak mencukupi untuk 1 ${med.unit}${multiplier > 1 ? ` (${multiplier} pcs)` : ''}.`,
+          });
+          return prev;
+        }
         return [
           ...prev,
           {
@@ -211,9 +235,12 @@ export const PosView: React.FC = () => {
             unit: med.unit,
             price: med.price,
             qty: 1,
-            subtotal: med.price,
+            subtotal: 1 * multiplier * med.price,
             isPpn,
             ppnRate: itemPpnRate,
+            itemType: med.itemType || 'obat',
+            unitMultiplier: multiplier,
+            purchasePrice: med.purchasePrice || 0,
           },
         ];
       }
@@ -226,7 +253,7 @@ export const PosView: React.FC = () => {
         type: 'out_of_stock',
         barcode: med.code,
         medicine: med,
-        message: `Sediaan obat "${med.name}" (${med.code}) saat ini TIDAK TERSEDIA (Stok Habis: 0 ${med.unit}). Barang tidak dapat dimasukkan ke keranjang.`,
+        message: `Sediaan obat "${med.name}" (${med.code}) saat ini TIDAK TERSEDIA (Stok Habis: ${formatStockDisplay(med)}). Barang tidak dapat dimasukkan ke keranjang.`,
       });
       return false;
     }
@@ -243,14 +270,20 @@ export const PosView: React.FC = () => {
     }
 
     const existingInCart = cart.find(i => i.medicineId === med.id);
-    if (existingInCart && existingInCart.qty + 1 > med.stock) {
-      setScanAlert({
-        type: 'stock_exceeded',
-        barcode: med.code,
-        medicine: med,
-        message: `Jumlah sediaan "${med.name}" di keranjang (${existingInCart.qty} ${med.unit}) sudah mencapai batas maksimum stok apotek (${med.stock} ${med.unit}).`,
-      });
-      return false;
+    const multiplier = med.unit === 'Lusin' ? 12 : (med.unitMultiplier || 1);
+    if (existingInCart) {
+      const nextTotalPcs = (existingInCart.qty + 1) * multiplier;
+      if (nextTotalPcs > med.stock) {
+        const availableStockStr = formatStockDisplay(med);
+        const currentCartPcs = existingInCart.qty * multiplier;
+        setScanAlert({
+          type: 'stock_exceeded',
+          barcode: med.code,
+          medicine: med,
+          message: `Jumlah sediaan "${med.name}" di keranjang (${existingInCart.qty} ${med.unit}${multiplier > 1 ? ` = ${currentCartPcs} pcs` : ''}) jika ditambah 1 ${med.unit} lagi (${nextTotalPcs} pcs) melebihi batas stok apotek (${availableStockStr}).`,
+        });
+        return false;
+      }
     }
 
     // STRICT PERPAJAKAN SEPARATION: Obat PPN 11% & Non-PPN tidak boleh digabung dalam 1 transaksi
@@ -345,15 +378,56 @@ export const PosView: React.FC = () => {
           if (item.medicineId === medicineId) {
             const newQty = item.qty + delta;
             if (newQty <= 0) return null; // remove item
-            if (newQty > med.stock) {
-              alert(`Jumlah melebihi stok yang tersedia (${med.stock} ${med.unit})`);
+            const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1);
+            const totalNeededPcs = newQty * multiplier;
+            if (totalNeededPcs > med.stock) {
+              const availableStockStr = formatStockDisplay(med);
+              setScanAlert({
+                type: 'stock_exceeded',
+                barcode: med.code,
+                medicine: med,
+                message: `Permintaan ${newQty} ${item.unit}${multiplier > 1 ? ` (${totalNeededPcs} pcs)` : ''} melebihi sisa stok apotek yang tersedia (${availableStockStr}).`,
+              });
               return item;
             }
-            return { ...item, qty: newQty, subtotal: newQty * item.price };
+            return { ...item, qty: newQty, subtotal: newQty * multiplier * item.price, unitMultiplier: multiplier };
           }
           return item;
         })
         .filter(Boolean) as TransactionItem[]
+    );
+  };
+
+  const setCartItemQty = (medicineId: string, targetQty: number) => {
+    const med = medicines.find(m => m.id === medicineId);
+    if (!med) return;
+
+    if (isNaN(targetQty) || targetQty <= 0) {
+      removeFromCart(medicineId);
+      return;
+    }
+
+    setCart(prev =>
+      prev.map(item => {
+        if (item.medicineId === medicineId) {
+          const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1);
+          const totalNeededPcs = targetQty * multiplier;
+          if (totalNeededPcs > med.stock) {
+            const availableStockStr = formatStockDisplay(med);
+            setScanAlert({
+              type: 'stock_exceeded',
+              barcode: med.code,
+              medicine: med,
+              message: `Permintaan ${targetQty} ${item.unit}${multiplier > 1 ? ` (${totalNeededPcs} pcs)` : ''} melebihi sisa stok apotek yang tersedia (${availableStockStr}).`,
+            });
+            const maxPossibleQty = Math.floor(med.stock / multiplier);
+            if (maxPossibleQty <= 0) return item;
+            return { ...item, qty: maxPossibleQty, subtotal: maxPossibleQty * multiplier * item.price, unitMultiplier: multiplier };
+          }
+          return { ...item, qty: targetQty, subtotal: targetQty * multiplier * item.price, unitMultiplier: multiplier };
+        }
+        return item;
+      })
     );
   };
 
@@ -779,7 +853,7 @@ export const PosView: React.FC = () => {
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
-                          Stok: {med.stock}
+                          Stok: {formatStockDisplay(med)}
                         </span>
                       </div>
 
@@ -839,8 +913,13 @@ export const PosView: React.FC = () => {
                           </span>
                         )}
                       </div>
-                      <p className="text-[10px] text-slate-500">
-                        {formatRupiah(item.price)} / {item.unit}
+                      <p className="text-[10px] text-slate-500 flex items-center gap-1.5 flex-wrap">
+                        <span>{formatRupiah(item.price)} / {item.unit}</span>
+                        {(item.unit === 'Lusin' || (item.unitMultiplier && item.unitMultiplier > 1)) && (
+                          <span className="text-emerald-700 font-extrabold bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.2 rounded text-[9px]">
+                            = {item.qty * (item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1))} pcs
+                          </span>
+                        )}
                       </p>
                     </div>
 
@@ -849,15 +928,23 @@ export const PosView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => updateCartQty(item.medicineId, -1)}
-                          className="p-1 hover:bg-slate-200 text-slate-600"
+                          className="p-1 hover:bg-slate-200 text-slate-600 transition-colors"
+                          title="Kurangi 1"
                         >
                           <Minus className="w-3 h-3" />
                         </button>
-                        <span className="px-2 font-bold text-slate-900 text-xs">{item.qty}</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.qty}
+                          onChange={e => setCartItemQty(item.medicineId, parseInt(e.target.value) || 0)}
+                          className="w-11 text-center font-extrabold text-slate-900 text-xs bg-white border-x border-slate-200 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
                         <button
                           type="button"
                           onClick={() => updateCartQty(item.medicineId, 1)}
-                          className="p-1 hover:bg-slate-200 text-slate-600"
+                          className="p-1 hover:bg-slate-200 text-slate-600 transition-colors"
+                          title="Tambah 1"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
@@ -1170,31 +1257,63 @@ export const PosView: React.FC = () => {
 
             {/* Total & Payment Method */}
             <form onSubmit={handleCheckout} className="space-y-3 pt-3 border-t border-slate-100">
-              <div className="bg-emerald-950 text-white p-4 rounded-xl space-y-2 shadow-xs">
-                <div className="flex items-center justify-between">
+              <div className="bg-emerald-950 text-white p-4 rounded-xl space-y-2.5 shadow-xs">
+                {/* Breakdown Subtotal & Biaya */}
+                <div className="space-y-1.5 text-xs pb-2 border-b border-emerald-800/80">
+                  <div className="flex justify-between items-center text-emerald-200">
+                    <span>Subtotal Sediaan ({cart.reduce((sum, i) => sum + i.qty, 0)} {cart.length === 1 ? cart[0].unit : 'item'}):</span>
+                    <span className="font-mono font-bold text-white">{formatRupiah(rawCartSubtotal)}</span>
+                  </div>
+
+                  {isPrescription && (
+                    <>
+                      {effectiveMarkupRate > 0 && (
+                        <div className="flex justify-between items-center text-indigo-200">
+                          <span>Jasa / Markup Resep ({effectiveMarkupRate}%):</span>
+                          <span className="font-mono font-bold text-indigo-300">
+                            +{formatRupiah(Math.round((rawCartSubtotal * effectiveMarkupRate) / 100))}
+                          </span>
+                        </div>
+                      )}
+                      {effectiveRacikanFee > 0 && (
+                        <div className="flex justify-between items-center text-indigo-200">
+                          <span>Biaya Racikan Dokter:</span>
+                          <span className="font-mono font-bold text-indigo-300">
+                            +{formatRupiah(effectiveRacikanFee)}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {taxType === 'PPN' && (
+                    <>
+                      <div className="flex justify-between items-center text-blue-200">
+                        <span>DPP (Dasar Pengenaan Pajak):</span>
+                        <span className="font-mono font-bold text-blue-100">{formatRupiah(dppAmount)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-amber-200">
+                        <span>PPN ({ppnRate}% {isPpnIncluded ? 'Inc.' : 'Exc.'}):</span>
+                        <span className="font-mono font-bold text-amber-300">
+                          {isPpnIncluded ? `(Inc) ${formatRupiah(ppnAmount)}` : `+${formatRupiah(ppnAmount)}`}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Grand Total */}
+                <div className="flex items-center justify-between pt-0.5">
                   <div>
                     <span className="text-[10px] uppercase font-bold text-emerald-300 block">
-                      TOTAL {taxType === 'PPN' ? `FAKTUR PPN (${ppnRate}%)` : 'NOTA NON-PPN'}
+                      TOTAL BAYAR {taxType === 'PPN' ? `(FAKTUR PPN)` : '(NOTA NON-PPN)'}
                     </span>
-                    <span className="text-xs text-emerald-200">{cart.length} Jenis Obat</span>
+                    <span className="text-xs text-emerald-200">{cart.length} Jenis Sediaan</span>
                   </div>
-                  <span className="text-2xl font-black text-emerald-400 tracking-tight">
+                  <span className="text-2xl font-black text-amber-300 tracking-tight font-mono">
                     {formatRupiah(totalAmount)}
                   </span>
                 </div>
-
-                {taxType === 'PPN' && (
-                  <div className="pt-2 border-t border-emerald-800 text-[11px] space-y-1 text-emerald-100">
-                    <div className="flex justify-between">
-                      <span className="text-emerald-300">DPP (Dasar Pengenaan Pajak):</span>
-                      <span className="font-semibold">{formatRupiah(dppAmount)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-emerald-300">PPN ({ppnRate}%):</span>
-                      <span className="font-bold text-amber-300">{formatRupiah(ppnAmount)}</span>
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Payment Method Selector */}
@@ -1522,9 +1641,9 @@ export const PosView: React.FC = () => {
               {scanAlert.medicine && (
                 <div className="pt-2.5 border-t border-slate-200 grid grid-cols-2 gap-2 text-[11px]">
                   <div className="bg-white p-2 rounded-xl border border-slate-200">
-                    <span className="text-slate-400 block font-normal text-[10px]">Sisa Stok:</span>
+                    <span className="text-slate-400 block font-normal text-[10px]">Sisa Stok Tersedia:</span>
                     <span className={`font-bold ${scanAlert.medicine.stock <= 0 ? 'text-rose-600 font-extrabold' : 'text-slate-800'}`}>
-                      {scanAlert.medicine.stock} {scanAlert.medicine.unit}
+                      {formatStockDisplay(scanAlert.medicine)}
                     </span>
                   </div>
                   <div className="bg-white p-2 rounded-xl border border-slate-200">

@@ -155,3 +155,24 @@ export function isPpnTransaction(t: {
   if ((t.ppnRate ?? 0) > 0) return true;
   return false;
 }
+
+export function formatStockDisplay(
+  stock: number,
+  unit?: string,
+  unitMultiplier?: number
+): string {
+  const rawUnit = unit || 'pcs';
+  const mult = rawUnit === 'Lusin' ? 12 : (unitMultiplier || 1);
+  if (mult > 1) {
+    const mainQty = Math.floor(stock / mult);
+    const sisaPcs = stock % mult;
+    if (sisaPcs > 0 && mainQty > 0) {
+      return `${mainQty} ${rawUnit} ${sisaPcs} pcs (${stock} pcs total)`;
+    } else if (sisaPcs > 0 && mainQty === 0) {
+      return `${stock} pcs`;
+    } else {
+      return `${mainQty} ${rawUnit} (${stock} pcs)`;
+    }
+  }
+  return `${stock} ${rawUnit}`;
+}

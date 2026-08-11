@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Medicine, MedicineCategory } from '../types';
-import { formatRupiah, getExpiredStatus, getDaysUntilExpired, formatDate } from '../utils/formatters';
+import { formatRupiah, getExpiredStatus, getDaysUntilExpired, formatDate, formatStockDisplay } from '../utils/formatters';
 import {
   Pill,
   Search,
@@ -22,6 +22,8 @@ import {
   RotateCcw,
   Archive,
   ShieldCheck,
+  PackagePlus,
+  ShoppingBag,
 } from 'lucide-react';
 
 export const MedicinesView: React.FC = () => {
@@ -33,6 +35,7 @@ export const MedicinesView: React.FC = () => {
     restoreMedicine,
     stockHistory,
     currentUser,
+    setActiveTab,
   } = useApp();
 
   // Search & Filter state
@@ -41,7 +44,8 @@ export const MedicinesView: React.FC = () => {
   const [stockFilter, setStockFilter] = useState<string>('all'); // 'all' | 'low' | 'normal'
   const [expiredFilter, setExpiredFilter] = useState<string>('all'); // 'all' | 'expired' | '30' | '60' | '90' | '120' | '150' | '180'
   const [statusFilter, setStatusFilter] = useState<string>('active'); // 'active' | 'inactive' | 'all'
-  const [taxFilter, setTaxFilter] = useState<string>('ppn'); // 'ppn' | 'non_ppn'
+  const [taxFilter, setTaxFilter] = useState<string>('all'); // 'all' | 'ppn' | 'non_ppn'
+  const [itemTypeFilter, setItemTypeFilter] = useState<'all' | 'obat' | 'non_obat'>('all');
 
   // Price Display Toggle in Table ('both' | 'inc' | 'non')
   const [priceDisplayMode, setPriceDisplayMode] = useState<'both' | 'inc' | 'non'>('inc');
@@ -61,6 +65,7 @@ export const MedicinesView: React.FC = () => {
   // General Form Fields
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
+  const [itemType, setItemType] = useState<'obat' | 'non_obat'>('obat');
   const [category, setCategory] = useState<MedicineCategory>('Obat Bebas');
   const [stock, setStock] = useState<number>(0);
   const [minStock, setMinStock] = useState<number>(10);
@@ -68,6 +73,10 @@ export const MedicinesView: React.FC = () => {
   const [expiredDate, setExpiredDate] = useState('');
   const [location, setLocation] = useState('');
   const [isActive, setIsActive] = useState(true);
+
+  // Margin & BHP Auto Pricing
+  const [bhpAmount, setBhpAmount] = useState<number>(0);
+  const [marginPct, setMarginPct] = useState<number>(20);
 
   // PPN & Pricing States
   const [ppnRate, setPpnRate] = useState<number>(11);
@@ -91,7 +100,7 @@ export const MedicinesView: React.FC = () => {
     'Lainnya',
   ];
 
-  const units = ['Strip', 'Botol', 'Tube', 'Box', 'Tablet', 'Blister', 'Pcs', 'Ampul', 'Sachet'];
+  const units = ['Strip', 'Botol', 'Tube', 'Box', 'Tablet', 'Blister', 'Pcs', 'Ampul', 'Sachet', 'Dus', 'Pack', 'Lusin'];
 
   // Helper Math Converters for PPN
   const calcIncFromNon = (nonVal: number, rate: number) => Math.round(nonVal * (1 + rate / 100));
@@ -129,27 +138,29 @@ export const MedicinesView: React.FC = () => {
 
   const openAddModal = () => {
     setEditingMedicine(null);
-    const nextCodeNum = medicines.length + 1;
-    setCode(`OBT-${String(nextCodeNum).padStart(3, '0')}`);
+    const count = medicines.length + 1;
+    setCode(`OBT-${String(count).padStart(3, '0')}`);
     setName('');
+    setItemType('obat');
     setCategory('Obat Bebas');
-    
-    // Default PPN settings & values
+    setBhpAmount(0);
+    setMarginPct(20);
+
     const rate = 11;
     setPpnRate(rate);
     setIsPpnIncluded(true);
 
-    const defaultPurInc = 7000;
-    const defaultPurNon = calcNonFromInc(defaultPurInc, rate);
-    setPurchasePriceIncPpn(defaultPurInc);
-    setPurchasePriceNonPpn(defaultPurNon);
+    const purInc = 10000;
+    const purNon = calcNonFromInc(purInc, rate);
+    setPurchasePriceIncPpn(purInc);
+    setPurchasePriceNonPpn(purNon);
 
-    const defaultPriceInc = 10000;
-    const defaultPriceNon = calcNonFromInc(defaultPriceInc, rate);
-    setPriceIncPpn(defaultPriceInc);
-    setPriceNonPpn(defaultPriceNon);
+    const pInc = 12000;
+    const pNon = calcNonFromInc(pInc, rate);
+    setPriceIncPpn(pInc);
+    setPriceNonPpn(pNon);
 
-    setStock(20);
+    setStock(10);
     setMinStock(10);
     setUnit('Strip');
 
@@ -165,7 +176,10 @@ export const MedicinesView: React.FC = () => {
     setEditingMedicine(med);
     setCode(med.code);
     setName(med.name);
+    setItemType(med.itemType || 'obat');
     setCategory(med.category);
+    setBhpAmount(med.bhpAmount || 0);
+    setMarginPct(med.marginPct || 20);
 
     const incPpn = med.isPpnIncluded ?? true;
     const rate = incPpn ? (med.ppnRate ?? 11) : 0;
@@ -215,10 +229,14 @@ export const MedicinesView: React.FC = () => {
     const medData = {
       code,
       name,
+      itemType,
       category,
       price: finalPrice,
       purchasePrice: finalPurchase,
-      stock: Number(stock),
+      marginPct: Number(marginPct),
+      bhpAmount: Number(bhpAmount),
+      unitMultiplier: unit === 'Lusin' ? 12 : 1,
+      stock: editingMedicine ? editingMedicine.stock : Number(stock),
       minStock: Number(minStock),
       unit,
       expiredDate,
@@ -312,7 +330,11 @@ export const MedicinesView: React.FC = () => {
       (taxFilter === 'ppn' && isMedPpn) ||
       (taxFilter === 'non_ppn' && !isMedPpn);
 
-    return matchesSearch && matchesCategory && matchesStock && matchesStatus && matchesExpired && matchesTax;
+    const matchesItemType =
+      itemTypeFilter === 'all' ||
+      (itemTypeFilter === 'obat' ? (med.itemType || 'obat') === 'obat' : med.itemType === 'non_obat');
+
+    return matchesSearch && matchesCategory && matchesStock && matchesStatus && matchesExpired && matchesTax && matchesItemType;
   });
 
   return (
@@ -380,7 +402,49 @@ export const MedicinesView: React.FC = () => {
       </div>
 
       {/* Filter & Search Toolbar */}
-      <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-xs space-y-3">
+      <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-xs space-y-4">
+        {/* Classification Tabs (Obat vs Non-Obat) */}
+        <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setItemTypeFilter('obat')}
+              className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+                itemTypeFilter === 'obat'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Pill className="w-4 h-4" />
+              Sediaan Obat ({medicines.filter(m => (m.itemType || 'obat') === 'obat').length})
+            </button>
+            <button
+              onClick={() => setItemTypeFilter('non_obat')}
+              className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+                itemTypeFilter === 'non_obat'
+                  ? 'bg-purple-600 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Tag className="w-4 h-4" />
+              Barang Non-Obat ({medicines.filter(m => m.itemType === 'non_obat').length})
+            </button>
+            <button
+              onClick={() => setItemTypeFilter('all')}
+              className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all ${
+                itemTypeFilter === 'all'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Semua Katalog ({medicines.length})
+            </button>
+          </div>
+
+          <div className="text-[11px] font-bold text-slate-500">
+            Menampilkan: <span className="text-slate-900 font-extrabold">{filteredMedicines.length}</span> item
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
           {/* Search bar */}
           <div className="relative">
@@ -650,7 +714,7 @@ export const MedicinesView: React.FC = () => {
                       <span className="text-slate-400 block text-[10px] font-bold">Stok Tersedia:</span>
                       <div className="flex items-center gap-1 mt-0.5">
                         <span className={`font-bold ${isLowStock ? 'text-rose-600' : 'text-slate-900'}`}>
-                          {med.stock} {med.unit}
+                          {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
                         </span>
                         <span className="text-[9px] text-slate-400">(Min: {med.minStock})</span>
                       </div>
@@ -818,7 +882,7 @@ export const MedicinesView: React.FC = () => {
                       <td className="py-3 px-4">
                         <div className="font-mono font-bold text-slate-900 text-[11px]">{med.code}</div>
                         <div className="font-semibold text-slate-900 text-xs">{med.name}</div>
-                        <div className="text-[10px] text-slate-500">Satuan: {med.unit}</div>
+                        <div className="text-[10px] text-slate-500">Satuan: {med.unit}{med.unit === 'Lusin' ? ' (12 pcs)' : ''}</div>
                       </td>
 
                       {/* Category & Location & Tax Badge */}
@@ -932,10 +996,10 @@ export const MedicinesView: React.FC = () => {
                               isLowStock ? 'text-rose-600' : 'text-slate-900'
                             }`}
                           >
-                            {med.stock}
+                            {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
                           </span>
                           <span className="text-[10px] text-slate-500">
-                            {med.unit} (Min: {med.minStock})
+                            (Min: {med.minStock})
                           </span>
                         </div>
                         {isLowStock && (
@@ -1032,84 +1096,341 @@ export const MedicinesView: React.FC = () => {
         </div>
       </div>
 
-      {/* Add / Edit Medicine Modal with Interactive PPN Price Calculator */}
+      {/* Add / Edit Medicine Modal with StockInView layout */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-3 sm:p-4 text-center">
-            <div className="bg-white rounded-2xl shadow-xl max-w-xl w-full border border-slate-100 text-left my-auto flex flex-col max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] overflow-hidden animate-in fade-in duration-200">
-              <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <Receipt className="w-5 h-5 text-emerald-400" />
-                  <div>
-                    <h3 className="font-bold text-sm">
-                      {editingMedicine ? 'Edit Sediaan Obat & Harga PPN' : 'Tambah Obat Baru (+ Atur PPN)'}
-                    </h3>
-                    <p className="text-[11px] text-slate-400">Atur harga beli modal dan harga jual dengan konversi PPN otomatis</p>
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl p-6 space-y-5 animate-fade-in my-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-2xl text-white ${itemType === 'obat' ? 'bg-emerald-600' : 'bg-purple-600'}`}>
+                  {itemType === 'obat' ? <PackagePlus className="w-5 h-5" /> : <ShoppingBag className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900">
+                    {editingMedicine
+                      ? `Edit ${itemType === 'obat' ? 'Sediaan Obat' : 'Barang Non-Obat'}`
+                      : `Tambah ${itemType === 'obat' ? 'Obat Baru' : 'Barang Non-Obat Baru'}`}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {editingMedicine
+                      ? 'Penetapan harga jual otomatis berbasis Modal, BHP (Bahan Habis Pakai), dan Persentase Margin.'
+                      : 'Atur data produk dan penetapan harga jual kasir.'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFormOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+              {/* Item Type Selector Switcher (Hanya Bisa Dipilih Saat Tambah Item Baru) */}
+              {!editingMedicine ? (
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3">
+                  <span className="font-bold text-slate-700">Tipe / Klasifikasi Produk:</span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemType('obat');
+                        if (['Barang Umum', 'Perawatan & Kosmetik', 'Makanan & Minuman', 'Lainnya'].includes(category)) {
+                          setCategory('Obat Bebas');
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        itemType === 'obat'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-white text-slate-600 border border-slate-200'
+                      }`}
+                    >
+                      <Pill className="w-3.5 h-3.5" />
+                      Obat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemType('non_obat');
+                        if (['Obat Bebas', 'Obat Bebas Terbatas', 'Obat Keras', 'Jamu & Herbal', 'Suplemen & Vitamin', 'Alat Kesehatan'].includes(category)) {
+                          setCategory('Barang Umum');
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        itemType === 'non_obat'
+                          ? 'bg-purple-600 text-white shadow-xs'
+                          : 'bg-white text-slate-600 border border-slate-200'
+                      }`}
+                    >
+                      <Tag className="w-3.5 h-3.5" />
+                      Non-Obat
+                    </button>
                   </div>
                 </div>
-                <button
-                  onClick={() => setIsFormOpen(false)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+              ) : (
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3">
+                  <span className="font-bold text-slate-700">Tipe / Klasifikasi Produk:</span>
+                  <span className={`px-3 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1.5 ${
+                    itemType === 'obat' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-purple-100 text-purple-800 border border-purple-300'
+                  }`}>
+                    {itemType === 'obat' ? <Pill className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5" />}
+                    {itemType === 'obat' ? 'Sediaan Obat' : 'Barang Non-Obat'} (Terkunci)
+                  </span>
+                </div>
+              )}
 
-              <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
-                <div className="p-6 space-y-4 text-xs overflow-y-auto flex-1">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Kode Obat</label>
+                  <label className="block font-bold text-slate-700 mb-1">Kode Item *</label>
                   <input
                     type="text"
                     required
                     value={code}
                     onChange={e => setCode(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Kategori</label>
-                  <select
-                    value={category}
-                    onChange={e => setCategory(e.target.value as MedicineCategory)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  >
-                    {categories.map(c => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="block font-bold text-slate-700 mb-1">Nama Item *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder={itemType === 'obat' ? 'cth. Amoxicillin 500mg' : 'cth. Sabun Cuci Tangan'}
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
                 </div>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Nama Obat</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Paracetamol 500mg (Sanbe)"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-semibold"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Kategori</label>
+                  <select
+                    value={category}
+                    onChange={e => setCategory(e.target.value as MedicineCategory)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {itemType === 'obat' ? (
+                      <>
+                        <option value="Obat Bebas">Obat Bebas</option>
+                        <option value="Obat Bebas Terbatas">Obat Bebas Terbatas</option>
+                        <option value="Obat Keras">Obat Keras</option>
+                        <option value="Jamu & Herbal">Jamu & Herbal</option>
+                        <option value="Suplemen & Vitamin">Suplemen & Vitamin</option>
+                        <option value="Alat Kesehatan">Alat Kesehatan</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="Barang Umum">Barang Umum</option>
+                        <option value="Perawatan & Kosmetik">Perawatan & Kosmetik</option>
+                        <option value="Makanan & Minuman">Makanan & Minuman</option>
+                        <option value="Lainnya">Lainnya</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Satuan</label>
+                  <select
+                    value={unit}
+                    onChange={e => setUnit(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="Strip">Strip</option>
+                    <option value="Botol">Botol</option>
+                    <option value="Tube">Tube</option>
+                    <option value="Box">Box</option>
+                    <option value="Tablet">Tablet</option>
+                    <option value="Blister">Blister</option>
+                    <option value="Pcs">Pcs</option>
+                    <option value="Ampul">Ampul</option>
+                    <option value="Sachet">Sachet</option>
+                    <option value="Dus">Dus</option>
+                    <option value="Pack">Pack</option>
+                    <option value="Lusin">Lusin</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Lokasi Rak</label>
+                  <input
+                    type="text"
+                    value={location}
+                    onChange={e => setLocation(e.target.value)}
+                    placeholder="cth. Rak A1"
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
               </div>
 
-              {/* FITUR ATUR HARGA + PPN DAN HARGA NON PPN (KALKULATOR INTERAKTIF) */}
-              <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-3.5 shadow-md border border-slate-800">
-                <div className="flex items-center justify-between border-b border-slate-700/80 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <div className="p-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg">
-                      <Calculator className="w-4 h-4" />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    {editingMedicine ? 'Stok Saat Ini (Terkunci)' : `Stok Awal (${unit})`}
+                  </label>
+                  {editingMedicine ? (
+                    <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 font-bold text-slate-700">
+                      {formatStockDisplay(editingMedicine.stock, editingMedicine.unit, editingMedicine.unitMultiplier)}
                     </div>
+                  ) : (
+                    <input
+                      type="number"
+                      min="0"
+                      value={stock}
+                      onChange={e => setStock(Number(e.target.value))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  )}
+                  {editingMedicine ? (
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Stok awal tidak dapat diubah di sini. Gunakan Stok Masuk atau Stok Opnam.
+                    </p>
+                  ) : (
+                    null
+                  )}
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Stok Minimum Alert</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={minStock}
+                    onChange={e => setMinStock(Number(e.target.value))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Tanggal Expired</label>
+                  <input
+                    type="date"
+                    value={expiredDate}
+                    onChange={e => setExpiredDate(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* AUTOMATIC PRICING & MARGIN SECTION - Hanya Tampil Saat Edit Item */}
+              {editingMedicine && (
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
+                  <h4 className="font-extrabold text-slate-800 text-xs flex items-center gap-2">
+                    <Calculator className="w-4 h-4 text-emerald-600" />
+                    Kalkulasi Otomatis Harga Jual (Harga Beli + BHP + Margin)
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <h4 className="font-extrabold text-xs text-white">Form Pengaturan Harga & PPN</h4>
-                      <p className="text-[10px] text-slate-400">Isi salah satu kolom, nilai pasangan akan terhitung otomatis</p>
+                      <label className="block font-bold text-slate-700 mb-1">Harga Beli / Modal (Rp) *</label>
+                      <input
+                        type="number"
+                        min="0"
+                        required
+                        value={isPpnIncluded ? purchasePriceIncPpn : purchasePriceNonPpn}
+                        onChange={e => {
+                          const val = Number(e.target.value);
+                          if (isPpnIncluded) {
+                            handlePurchaseIncPpnChange(val);
+                          } else {
+                            handlePurchaseNonPpnChange(val);
+                          }
+                        }}
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Bahan Habis Pakai / BHP (Rp)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={bhpAmount}
+                        onChange={e => {
+                          const val = Number(e.target.value);
+                          setBhpAmount(val);
+                        }}
+                        placeholder="0"
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Margin Keuntungan (%) *</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        required
+                        value={marginPct}
+                        onChange={e => {
+                          const val = Number(e.target.value);
+                          setMarginPct(val);
+                        }}
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                  {/* DYNAMIC PRICE RESULT DISPLAY WITH APPLY ACTION BUTTON */}
+                  {(() => {
+                    const hpp = Number((isPpnIncluded ? purchasePriceIncPpn : purchasePriceNonPpn) || 0);
+                    const bhp = Number(bhpAmount || 0);
+                    const margin = Number(marginPct || 0);
+                    const totalHpp = hpp + bhp;
+                    const computedSellingPrice = Math.round(totalHpp * (1 + margin / 100));
+
+                    const handleApplyCalculatedPrice = () => {
+                      if (isPpnIncluded) {
+                        handlePriceIncPpnChange(computedSellingPrice);
+                      } else {
+                        handlePriceNonPpnChange(computedSellingPrice);
+                      }
+                    };
+
+                    return (
+                      <div className="bg-emerald-900 text-white p-3.5 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 font-mono shadow-xs">
+                        <div>
+                          <span className="text-[10px] text-emerald-300 font-sans block">Simulasi Formula Harga Jual:</span>
+                          <span className="text-xs font-semibold text-emerald-100">
+                            Total HPP ({formatRupiah(hpp)} + BHP {formatRupiah(bhp)}) = <strong className="text-white">{formatRupiah(totalHpp)}</strong>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+                          <div className="text-right">
+                            <span className="text-[10px] text-emerald-300 font-sans block">Harga Kalkulasi (+{margin}% Margin):</span>
+                            <span className="text-base font-extrabold text-amber-300">{formatRupiah(computedSellingPrice)}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleApplyCalculatedPrice}
+                            className="px-3 py-2 bg-amber-400 hover:bg-amber-300 text-emerald-950 font-extrabold rounded-xl text-xs font-sans transition-all shadow-md flex items-center gap-1.5 shrink-0 cursor-pointer active:scale-95"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            Terapkan Ke Harga Jual
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* PPN DETAILS & OVERRIDE */}
+              <div className="p-3.5 rounded-2xl bg-slate-900 text-white space-y-3 shadow-md border border-slate-800">
+                <div className="flex items-center justify-between border-b border-slate-700/80 pb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1 rounded bg-emerald-500/20 text-emerald-400">
+                      <Receipt className="w-3.5 h-3.5" />
+                    </div>
+                    <span className="font-extrabold text-xs text-white">Detail Skema PPN & Harga Jual Kasir</span>
+                  </div>
+
+                  <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
                     <button
                       type="button"
                       onClick={() => {
@@ -1117,13 +1438,11 @@ export const MedicinesView: React.FC = () => {
                         const rate = ppnRate > 0 ? ppnRate : 11;
                         handlePpnRateChange(rate);
                       }}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition-colors ${
-                        isPpnIncluded
-                          ? 'bg-blue-600 text-white shadow-xs'
-                          : 'text-slate-400 hover:text-white'
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-colors ${
+                        isPpnIncluded ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
                       }`}
                     >
-                      🏷️ PPN {ppnRate > 0 ? ppnRate : 11}%
+                      🏷️ Faktur PPN 11%
                     </button>
                     <button
                       type="button"
@@ -1131,10 +1450,8 @@ export const MedicinesView: React.FC = () => {
                         setIsPpnIncluded(false);
                         handlePpnRateChange(0);
                       }}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition-colors ${
-                        !isPpnIncluded
-                          ? 'bg-amber-600 text-white shadow-xs'
-                          : 'text-slate-400 hover:text-white'
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-colors ${
+                        !isPpnIncluded ? 'bg-amber-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       📄 Non-PPN
@@ -1142,270 +1459,72 @@ export const MedicinesView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Quick PPN Presets */}
-                <div className="flex items-center gap-2 text-[10px] flex-wrap">
-                  <span className="text-slate-400 font-semibold">Jenis / Tarif Pajak Obat:</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPpnIncluded(true);
-                      handlePpnRateChange(11);
-                    }}
-                    className={`px-2.5 py-1 rounded-lg font-bold border transition-colors ${
-                      isPpnIncluded && ppnRate === 11
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-                    }`}
-                  >
-                    🏷️ PPN 11% (Faktur Standard)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPpnIncluded(true);
-                      handlePpnRateChange(12);
-                    }}
-                    className={`px-2.5 py-1 rounded-lg font-bold border transition-colors ${
-                      isPpnIncluded && ppnRate === 12
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-                    }`}
-                  >
-                    🏷️ PPN 12%
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPpnIncluded(false);
-                      handlePpnRateChange(0);
-                    }}
-                    className={`px-2.5 py-1 rounded-lg font-bold border transition-colors ${
-                      !isPpnIncluded || ppnRate === 0
-                        ? 'bg-amber-500 text-slate-950 border-amber-400'
-                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-                    }`}
-                  >
-                    📄 Non-PPN (Bebas PPN)
-                  </button>
-                </div>
-
-                {/* 1. HARGA BELI / MODAL HPP SUPPLIER */}
-                <div className="bg-slate-800/90 p-3 rounded-xl border border-slate-700/80 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-[11px] text-emerald-300 flex items-center gap-1">
-                      <Coins className="w-3.5 h-3.5" /> 1. Harga Beli / HPP Modal Supplier
-                    </span>
-                    {ppnRate > 0 && (
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        Pajak PPN Beli: +{formatRupiah(purchasePriceIncPpn - purchasePriceNonPpn)}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-300 mb-1">
-                        Harga Beli Non-PPN (DPP)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-[10px]">Rp</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={purchasePriceNonPpn}
-                          onChange={e => handlePurchaseNonPpnChange(Number(e.target.value))}
-                          className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-bold text-xs focus:outline-none focus:border-emerald-500"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-emerald-400 mb-1 flex items-center gap-1">
-                        Harga Beli + PPN ({ppnRate}%)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-400 font-bold text-[10px]">Rp</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={purchasePriceIncPpn}
-                          onChange={e => handlePurchaseIncPpnChange(Number(e.target.value))}
-                          className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-emerald-500/50 text-emerald-300 font-extrabold text-xs focus:outline-none focus:border-emerald-400"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2. HARGA JUAL OBAT DI KASIR */}
-                <div className="bg-slate-800/90 p-3 rounded-xl border border-slate-700/80 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-[11px] text-indigo-300 flex items-center gap-1">
-                      <Tag className="w-3.5 h-3.5" /> 2. Harga Jual Penjualan Obat
-                    </span>
-                    {priceNonPpn > purchasePriceNonPpn && (
-                      <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/90 px-2 py-0.5 rounded border border-emerald-800">
-                        Profit: +{formatRupiah(priceNonPpn - purchasePriceNonPpn)} (Margin: {Math.round(((priceNonPpn - purchasePriceNonPpn) / (priceNonPpn || 1)) * 100)}%)
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[10px] font-semibold text-slate-300 mb-1">
-                        Harga Jual Non-PPN (DPP)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-[10px]">Rp</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={priceNonPpn}
-                          onChange={e => handlePriceNonPpnChange(Number(e.target.value))}
-                          className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-bold text-xs focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-indigo-300 mb-1 flex items-center gap-1">
-                        Harga Jual + PPN ({ppnRate}%)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-indigo-300 font-bold text-[10px]">Rp</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={priceIncPpn}
-                          onChange={e => handlePriceIncPpnChange(Number(e.target.value))}
-                          className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-indigo-500/50 text-indigo-200 font-extrabold text-xs focus:outline-none focus:border-indigo-400"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Price Setting Preference */}
-                  <div className="pt-1 flex items-center gap-2">
-                    <label className="flex items-center gap-2 text-[10px] font-bold text-slate-300 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isPpnIncluded}
-                        onChange={e => setIsPpnIncluded(e.target.checked)}
-                        className="rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
-                      />
-                      <span>Gunakan Harga Inc. PPN ({formatRupiah(priceIncPpn)}) sebagai Harga Utama Penjualan Kasir</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-300 mb-1">
+                      Harga Jual Non-PPN (DPP)
                     </label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-[10px]">Rp</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={priceNonPpn}
+                        onChange={e => handlePriceNonPpnChange(Number(e.target.value))}
+                        className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-bold text-xs focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-indigo-300 mb-1">
+                      Harga Jual + PPN ({ppnRate || 11}%)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-indigo-300 font-bold text-[10px]">Rp</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={priceIncPpn}
+                        onChange={e => handlePriceIncPpnChange(Number(e.target.value))}
+                        className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-indigo-500/50 text-indigo-200 font-extrabold text-xs focus:outline-none focus:border-indigo-400"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    {editingMedicine ? 'Stok Saat Ini (Terkunci)' : 'Stok Awal'}
-                  </label>
+              <div className="flex items-center gap-3 pt-2 justify-between">
+                <label className="flex items-center gap-2 font-bold text-slate-700 cursor-pointer">
                   <input
-                    type="number"
-                    min="0"
-                    disabled={!!editingMedicine}
-                    value={stock}
-                    onChange={e => setStock(Number(e.target.value))}
-                    className={`w-full px-3 py-2 rounded-xl border font-semibold focus:outline-none ${
-                      editingMedicine
-                        ? 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed'
-                        : 'bg-slate-50 border-slate-200 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500'
-                    }`}
+                    type="checkbox"
+                    checked={isActive}
+                    onChange={e => setIsActive(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
                   />
-                  {editingMedicine && (
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      Stok awal tidak dapat diubah dari menu edit. Gunakan menu Stok Masuk atau Penyesuaian Stok.
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Min. Stok</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={minStock}
-                    onChange={e => setMinStock(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Satuan</label>
-                  <select
-                    value={unit}
-                    onChange={e => setUnit(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  >
-                    {units.map(u => (
-                      <option key={u} value={u}>
-                        {u}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Tgl Expired</label>
-                  <input
-                    type="date"
-                    required
-                    value={expiredDate}
-                    onChange={e => setExpiredDate(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Lokasi Rak / Etalase</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Rak A1"
-                    value={location}
-                    onChange={e => setLocation(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-1 flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="isActive"
-                  checked={isActive}
-                  onChange={e => setIsActive(e.target.checked)}
-                  className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                />
-                <label htmlFor="isActive" className="text-xs font-semibold text-slate-700 cursor-pointer">
-                  Status Obat Aktif (Dapat dijual di Kasir)
+                  <span>Status Aktif (Dapat dijual)</span>
                 </label>
-              </div>
 
-              </div>
-
-              <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsFormOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-100 bg-white"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-xs flex items-center gap-2"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  Simpan Data Obat & PPN
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsFormOpen(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs transition-all shadow-md flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {editingMedicine ? 'Simpan Perubahan' : 'Simpan Item Baru'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
         </div>
-      </div>
       )}
 
       {/* Stock History Modal */}
