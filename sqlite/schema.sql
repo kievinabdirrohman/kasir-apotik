@@ -62,9 +62,13 @@ CREATE TABLE medicines (
   stock INTEGER NOT NULL DEFAULT 0,
   min_stock INTEGER NOT NULL DEFAULT 10,
   unit TEXT NOT NULL,
+  unit_multiplier INTEGER DEFAULT 1,
   expired_date TEXT NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 1,
   location TEXT,
+  item_type TEXT DEFAULT 'obat' CHECK (item_type IN ('obat', 'non_obat')),
+  margin_pct REAL DEFAULT 0,
+  bhp_amount REAL DEFAULT 0,
   ppn_rate REAL DEFAULT 11,
   is_ppn_included INTEGER DEFAULT 1,
   purchase_price_non_ppn REAL DEFAULT 0,
@@ -119,6 +123,10 @@ CREATE TABLE transactions (
   prescription_markup_amount REAL DEFAULT 0,
   prescription_racikan_fee REAL DEFAULT 0,
   cost_amount REAL DEFAULT 0,
+  obat_total_amount REAL DEFAULT 0,
+  non_obat_total_amount REAL DEFAULT 0,
+  obat_cost_amount REAL DEFAULT 0,
+  non_obat_cost_amount REAL DEFAULT 0,
   cashier_name TEXT NOT NULL,
   cashier_username TEXT NOT NULL,
   total_amount REAL NOT NULL DEFAULT 0,
@@ -158,6 +166,9 @@ CREATE TABLE transaction_items (
   subtotal REAL NOT NULL,
   is_ppn INTEGER DEFAULT 1,
   ppn_rate REAL DEFAULT 11,
+  item_type TEXT DEFAULT 'obat' CHECK (item_type IN ('obat', 'non_obat')),
+  unit_multiplier INTEGER DEFAULT 1,
+  purchase_price REAL DEFAULT 0,
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE RESTRICT
 );
@@ -178,11 +189,13 @@ CREATE TABLE stock_history (
   date TEXT NOT NULL,
   note TEXT,
   user_name TEXT NOT NULL,
+  item_type TEXT DEFAULT 'obat' CHECK (item_type IN ('obat', 'non_obat')),
   tax_type TEXT DEFAULT 'PPN',
   purchase_price REAL DEFAULT 0,
   selling_price REAL DEFAULT 0,
   ppn_amount REAL DEFAULT 0,
   margin_pct REAL DEFAULT 0,
+  bhp_amount REAL DEFAULT 0,
   FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE
 );
 
