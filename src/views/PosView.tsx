@@ -231,7 +231,7 @@ export const PosView: React.FC = () => {
           if (item.medicineId === med.id) {
             const nextQty = item.qty + 1;
             const mult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || multiplier);
-            return { ...item, qty: nextQty, subtotal: nextQty * item.price, unitMultiplier: mult };
+            return { ...item, qty: nextQty, subtotal: nextQty * mult * item.price, unitMultiplier: mult };
           }
           return item;
         });
@@ -256,7 +256,7 @@ export const PosView: React.FC = () => {
             unit: med.unit,
             price: med.price,
             qty: 1,
-            subtotal: 1 * med.price,
+            subtotal: multiplier * med.price,
             isPpn,
             ppnRate: itemPpnRate,
             itemType: med.itemType || 'obat',
@@ -320,6 +320,24 @@ export const PosView: React.FC = () => {
         });
         return false;
       }
+
+      // Also verify against active taxType (only meaningful when cart is non-empty)
+      if (taxType === 'PPN' && !isPpn) {
+        setTaxAlert({
+          title: 'PENGGABUNGAN TRANSAKSI DILARANG',
+          medicine: med,
+          message: `Transaksi saat ini ditetapkan sebagai Transaksi PPN 11%. Sediaan Obat Non-PPN ("${med.name}") tidak dapat dimasukkan ke Transaksi PPN.`,
+        });
+        return false;
+      }
+      if (taxType === 'NON_PPN' && isPpn) {
+        setTaxAlert({
+          title: 'PENGGABUNGAN TRANSAKSI DILARANG',
+          medicine: med,
+          message: `Transaksi saat ini ditetapkan sebagai Transaksi Non-PPN. Sediaan Obat PPN 11% ("${med.name}") tidak dapat dimasukkan ke Transaksi Non-PPN.`,
+        });
+        return false;
+      }
     } else {
       // Empty cart: auto set transaction tax type and filter to match the added item
       if (isPpn) {
@@ -329,24 +347,6 @@ export const PosView: React.FC = () => {
         setTaxType('NON_PPN');
         setTaxStatusFilter('non_ppn');
       }
-    }
-
-    // Also verify against active taxType
-    if (taxType === 'PPN' && !isPpn) {
-      setTaxAlert({
-        title: 'PENGGABUNGAN TRANSAKSI DILARANG',
-        medicine: med,
-        message: `Transaksi saat ini ditetapkan sebagai Transaksi PPN 11%. Sediaan Obat Non-PPN ("${med.name}") tidak dapat dimasukkan ke Transaksi PPN.`,
-      });
-      return false;
-    }
-    if (taxType === 'NON_PPN' && isPpn) {
-      setTaxAlert({
-        title: 'PENGGABUNGAN TRANSAKSI DILARANG',
-        medicine: med,
-        message: `Transaksi saat ini ditetapkan sebagai Transaksi Non-PPN. Sediaan Obat PPN 11% ("${med.name}") tidak dapat dimasukkan ke Transaksi Non-PPN.`,
-      });
-      return false;
     }
 
     processAddToCart(med);
@@ -410,7 +410,7 @@ export const PosView: React.FC = () => {
               });
               return item;
             }
-            return { ...item, qty: newQty, subtotal: newQty * item.price, unitMultiplier: multiplier };
+            return { ...item, qty: newQty, subtotal: newQty * multiplier * item.price, unitMultiplier: multiplier };
           }
           return item;
         })
@@ -418,11 +418,12 @@ export const PosView: React.FC = () => {
     );
   };
 
-  const setCartItemQty = (medicineId: string, targetQty: number) => {
+  // Input qty is in total pcs (e.g. 12 for 1 Lusin) — convert to whole units internally
+  const setCartItemQty = (medicineId: string, targetPcs: number) => {
     const med = medicines.find(m => m.id === medicineId);
     if (!med) return;
 
-    if (isNaN(targetQty) || targetQty <= 0) {
+    if (isNaN(targetPcs) || targetPcs <= 0) {
       removeFromCart(medicineId);
       return;
     }
@@ -431,6 +432,8 @@ export const PosView: React.FC = () => {
       prev.map(item => {
         if (item.medicineId === medicineId) {
           const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1);
+          let targetQty = Math.floor((targetPcs + 1e-6) / multiplier);
+          if (targetQty <= 0) targetQty = 1; // at least one full unit
           const totalNeededPcs = targetQty * multiplier;
           if (totalNeededPcs > med.stock) {
             const availableStockStr = formatStockDisplay(med);
@@ -438,13 +441,13 @@ export const PosView: React.FC = () => {
               type: 'stock_exceeded',
               barcode: med.code,
               medicine: med,
-              message: `Permintaan ${targetQty} ${item.unit}${multiplier > 1 ? ` (${totalNeededPcs} pcs)` : ''} melebihi sisa stok apotek yang tersedia (${availableStockStr}).`,
+              message: `Permintaan ${targetPcs} pcs (${targetQty} ${item.unit}) melebihi sisa stok apotek yang tersedia (${availableStockStr}).`,
             });
             const maxPossibleQty = Math.floor(med.stock / multiplier);
             if (maxPossibleQty <= 0) return item;
-            return { ...item, qty: maxPossibleQty, subtotal: maxPossibleQty * item.price, unitMultiplier: multiplier };
+            return { ...item, qty: maxPossibleQty, subtotal: maxPossibleQty * multiplier * item.price, unitMultiplier: multiplier };
           }
-          return { ...item, qty: targetQty, subtotal: targetQty * item.price, unitMultiplier: multiplier };
+          return { ...item, qty: targetQty, subtotal: targetQty * multiplier * item.price, unitMultiplier: multiplier };
         }
         return item;
       })
@@ -523,7 +526,7 @@ export const PosView: React.FC = () => {
   const isPaymentInsufficient = totalAmount > 0 && paymentAmount < totalAmount;
 
   // Submit POS Transaction
-  const handleCheckout = (e: React.FormEvent) => {
+  const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (cart.length === 0) {
@@ -548,7 +551,7 @@ export const PosView: React.FC = () => {
     }
 
     // Submit via Context
-    const created = createTransaction({
+    const created = await createTransaction({
       items: cart,
       customerId: selectedCustomerId || undefined,
       doctorId: isPrescription ? selectedDoctorId || undefined : undefined,
@@ -581,13 +584,13 @@ export const PosView: React.FC = () => {
   };
 
   // Quick Customer Registration
-  const handleQuickAddCustomer = (e: React.FormEvent) => {
+  const handleQuickAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickCustName || !quickCustPhone) {
       alert('Mohon isi nama dan nomor HP.');
       return;
     }
-    const newC = addCustomer({
+    const newC = await addCustomer({
       name: quickCustName,
       phone: quickCustPhone,
       status: 'Aktif',
@@ -972,12 +975,7 @@ export const PosView: React.FC = () => {
                         )}
                       </div>
                       <p className="text-[10px] text-slate-500 flex items-center gap-1.5 flex-wrap">
-                        <span>{formatRupiah(item.price)} / {item.unit}</span>
-                        {(item.unit === 'Lusin' || (item.unitMultiplier && item.unitMultiplier > 1)) && (
-                          <span className="text-emerald-700 font-extrabold bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.2 rounded text-[9px]">
-                            = {item.qty * (item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1))} pcs
-                          </span>
-                        )}
+                        <span>{formatRupiah(item.price)} / {(item.unit === 'Lusin' || (item.unitMultiplier && item.unitMultiplier > 1)) ? 'pcs' : item.unit}</span>
                       </p>
                     </div>
 
@@ -994,7 +992,7 @@ export const PosView: React.FC = () => {
                         <input
                           type="number"
                           min="1"
-                          value={item.qty}
+                          value={item.qty * (item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1))}
                           onChange={e => setCartItemQty(item.medicineId, parseInt(e.target.value) || 0)}
                           className="w-11 text-center font-extrabold text-slate-900 text-xs bg-white border-x border-slate-200 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                         />
@@ -1145,7 +1143,7 @@ export const PosView: React.FC = () => {
                   onChange={e => setSelectedCustomerId(e.target.value)}
                   className="w-full px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                 >
-                  <option value="">-- Customer Umum (Non-Member) --</option>
+                  <option key="" value="">-- Customer Umum (Non-Member) --</option>
                   {customers
                     .filter(c => c.status === 'Aktif')
                     .map(c => (
@@ -1170,9 +1168,6 @@ export const PosView: React.FC = () => {
                     onChange={e => {
                       const checked = e.target.checked;
                       setIsPrescription(checked);
-                      if (checked && !selectedDoctorId) {
-                        alert('⚠️ DOKTER WAJIB DIPILIH:\n\nKasir wajib memilih Dokter Pemberi Resep terlebih dahulu sebelum dapat mengonfigurasi opsi dan rumus perhitungan!');
-                      }
                     }}
                     className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                   />
@@ -1204,7 +1199,7 @@ export const PosView: React.FC = () => {
                             : 'bg-white border border-slate-300 text-slate-900 focus:ring-indigo-500/20 focus:border-indigo-500'
                         }`}
                       >
-                        <option value="">-- Pilih Dokter Pemberi Resep (Wajib) --</option>
+                        <option key="" value="">-- Pilih Dokter Pemberi Resep (Wajib) --</option>
                         {doctors
                           .filter(d => d.status === 'Aktif')
                           .map(d => (
@@ -1319,7 +1314,7 @@ export const PosView: React.FC = () => {
                 {/* Breakdown Subtotal & Biaya */}
                 <div className="space-y-1.5 text-xs pb-2 border-b border-emerald-800/80">
                   <div className="flex justify-between items-center text-emerald-200">
-                    <span>Subtotal Sediaan ({cart.reduce((sum, i) => sum + i.qty, 0)} {cart.length === 1 ? cart[0].unit : 'item'}):</span>
+                    <span>Subtotal Sediaan ({cart.reduce((sum, i) => sum + i.qty * (i.unit === 'Lusin' ? 12 : (i.unitMultiplier || 1)), 0)} pcs):</span>
                     <span className="font-mono font-bold text-white">{formatRupiah(rawCartSubtotal)}</span>
                   </div>
 

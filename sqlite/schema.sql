@@ -29,6 +29,9 @@ CREATE TABLE settings (
   default_ppn_rate REAL NOT NULL DEFAULT 11.0,
   default_tax_type TEXT NOT NULL DEFAULT 'PPN',
   default_ppn_included INTEGER NOT NULL DEFAULT 1,
+  -- Printer thermal (desktop / Electron): nama device printer & lebar kertas
+  printer_name TEXT DEFAULT '',
+  paper_width TEXT DEFAULT '58mm' CHECK (paper_width IN ('58mm', '80mm')),
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -16,6 +16,7 @@ import { ReportsView } from './views/ReportsView';
 import { FinancesView } from './views/FinancesView';
 import { UsersView } from './views/UsersView';
 import { SettingsView } from './views/SettingsView';
+import TutorialView from './views/TutorialView';
 
 const MainContent: React.FC = () => {
   const { currentUser, activeTab } = useApp();
@@ -56,6 +57,8 @@ const MainContent: React.FC = () => {
         return <UsersView />;
       case 'settings':
         return <SettingsView />;
+      case 'tutorial':
+        return <TutorialView />;
       default:
         return <DashboardView />;
     }

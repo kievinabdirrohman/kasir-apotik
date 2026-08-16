@@ -1,0 +1,56 @@
+# electron-builder configuration
+# Build a Windows .exe installer:  npm run electron:dist
+#
+# Why this layout keeps upgrades safe:
+#  - The SQLite database lives in the OS userData folder
+#    (%APPDATA%/<productName>/apotek.db), NOT inside the app folder.
+#    Reinstalling/upgrading the .exe never touches it.
+#  - sqlite/schema.sql is shipped as an extra resource; the server applies
+#    additive migrations at startup (see applyMigrations in src/server/app.ts),
+#    so older databases upgrade in place without data loss.
+
+appId: com.azzainiyah.apotek
+productName: Apotek Az Zainiyah
+copyright: Copyright © 2026 Apotek Az Zainiyah
+
+directories:
+  output: release
+
+files:
+  - dist/**
+  - electron-dist/**
+  - package.json
+
+# Native module must live outside app.asar or it cannot be loaded
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**
+
+# Schema shipped next to the executable → resources/sqlite/schema.sql
+extraResources:
+  - from: sqlite/schema.sql
+    to: sqlite/schema.sql
+
+# better-sqlite3 v13 ships an N-API prebuild that runs in both Node (web server)
+# and Electron, so no native rebuild is needed (rebuild would require Python +
+# MSVC on Windows). Keep false so `npm run electron:dist` works on clean machines.
+npmRebuild: false
+
+win:
+  target:
+    - nsis
+  # App icon (exe, taskbar, Start menu). A single 512x512 PNG here —
+  # electron-builder auto-converts it to the .ico format.
+  # Regenerate it from the logo with:  npm run icon:generate
+  icon: build/icon.png
+  # executableName is derived from productName; keep it short for the .exe
+  executableName: ApotekAzZainiyah
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Apotek Az Zainiyah
+  artifactName: ${productName}-Setup-${version}.${ext}

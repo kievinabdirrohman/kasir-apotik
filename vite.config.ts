@@ -5,6 +5,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Relative asset paths so the built app also works when Electron loads
+    // dist/index.html via the file:// protocol (desktop packaging).
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

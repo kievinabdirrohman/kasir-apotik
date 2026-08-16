@@ -187,7 +187,7 @@ export const StockInView: React.FC = () => {
   // Open Restock Modal Handler
   const openRestockModal = (type: 'obat' | 'non_obat' = 'obat') => {
     setModalItemType(type);
-    const candidateMeds = medicines.filter(m => m.isActive && (m.itemType || 'obat') === type);
+    const candidateMeds = medicines.filter(m => m.id && m.isActive && (m.itemType || 'obat') === type);
     const defaultMed = candidateMeds[0] || medicines[0];
     if (defaultMed) {
       handleModalMedSelect(defaultMed.id);
@@ -236,7 +236,7 @@ export const StockInView: React.FC = () => {
     }
   };
 
-  const handleRestockModalSubmit = (e: React.FormEvent) => {
+  const handleRestockModalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!modalMedId) {
       setErrorMessage('Mohon pilih sediaan obat / barang.');
@@ -250,10 +250,16 @@ export const StockInView: React.FC = () => {
     }
 
     const targetMed = medicines.find(m => m.id === modalMedId);
-    if (!targetMed) return;
+    if (!targetMed) {
+      setErrorMessage('Obat tidak ditemukan. Mohon pilih ulang sediaan.');
+      setTimeout(() => setErrorMessage(''), 4000);
+      return;
+    }
 
     const mult = (modalUnit === 'Lusin' || targetMed.unit === 'Lusin') ? 12 : (targetMed.unitMultiplier || 1);
-    const totalPcsAdded = modalQty * mult;
+    // Jumlah qty dihitung sebagai qty (pcs) langsung — tanpa konversi ×12 per lusin.
+    const totalPcsAdded = modalQty;
+    const qtyLabel = mult > 1 ? `${totalPcsAdded} pcs` : `${modalQty} ${modalUnit}`;
 
     const isPpn = modalTaxType === 'PPN';
     const computedTaxType: 'PPN' | 'NON_PPN' = isPpn ? 'PPN' : 'NON_PPN';
@@ -264,24 +270,30 @@ export const StockInView: React.FC = () => {
     const sell = modalSellingPrice;
     const marginPct = modalMarginPct;
 
-    const fullNote = `[RESTOCK ${computedTaxType}] Supplier: ${modalSupplier || '-'} | Faktur: ${modalFakturNo || '-'} | Qty: ${modalQty} ${modalUnit} (${totalPcsAdded} pcs) | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Margin: ${marginPct}% | Jual: ${formatRupiah(sell)} | ${modalNote || 'Restock via Dialog Modal'}`;
+    const fullNote = `[RESTOCK ${computedTaxType}] Supplier: ${modalSupplier || '-'} | Faktur: ${modalFakturNo || '-'} | Qty: ${qtyLabel} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Margin: ${marginPct}% | Jual: ${formatRupiah(sell)} | ${modalNote || 'Restock via Dialog Modal'}`;
 
-    addStock(modalMedId, totalPcsAdded, fullNote, {
-      taxType: computedTaxType,
-      purchasePrice: hpp,
-      bhpAmount: bhp,
-      sellingPrice: sell,
-      ppnAmount: isPpn ? Math.round((hpp - hpp / 1.11) * totalPcsAdded) : 0,
-      marginPct,
-      updateMedicineMaster: true,
-    });
+    try {
+      await addStock(modalMedId, totalPcsAdded, fullNote, {
+        taxType: computedTaxType,
+        purchasePrice: hpp,
+        bhpAmount: bhp,
+        sellingPrice: sell,
+        ppnAmount: isPpn ? Math.round((hpp - hpp / 1.11) * totalPcsAdded) : 0,
+        marginPct,
+        updateMedicineMaster: true,
+      });
 
-    setIsRestockModalOpen(false);
-    setSuccessMessage(
-      `Berhasil menambahkan +${modalQty} ${modalUnit} (${totalPcsAdded} pcs) (${computedTaxType}) untuk "${targetMed.name}"! No. Faktur: ${modalFakturNo || '-'}.`
-    );
-    setIsSuccessAlert(true);
-    setTimeout(() => setIsSuccessAlert(false), 4500);
+      setIsRestockModalOpen(false);
+      setSuccessMessage(
+        `Berhasil menambahkan +${qtyLabel} (${computedTaxType}) untuk "${targetMed.name}"! No. Faktur: ${modalFakturNo || '-'}.`
+      );
+      setIsSuccessAlert(true);
+      setTimeout(() => setIsSuccessAlert(false), 4500);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(`Gagal menyimpan stok: ${msg}`);
+      setTimeout(() => setErrorMessage(''), 5000);
+    }
   };
 
   // Open New Item Modal Handlers
@@ -327,7 +339,7 @@ export const StockInView: React.FC = () => {
     setIsNewItemModalOpen(true);
   };
 
-  const handleCreateNewItemSubmit = (e: React.FormEvent) => {
+  const handleCreateNewItemSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newItemName.trim() || !newItemCode.trim()) {
       setErrorMessage('Mohon lengkapi kode dan nama item.');
@@ -349,7 +361,7 @@ export const StockInView: React.FC = () => {
       stock: Number(newItemStock || 0),
       minStock: Number(newItemMinStock || 10),
       unit: newItemUnit,
-      unitMultiplier: 1,
+      unitMultiplier: newItemUnit === 'Lusin' ? 12 : 1,
       expiredDate: newItemExpiredDate,
       location: newItemLocation,
       isActive: true,
@@ -364,14 +376,19 @@ export const StockInView: React.FC = () => {
       priceIncPpn: newItemIsPpn ? computedSellingPrice : Math.round(computedSellingPrice * 1.11),
     };
 
-    const added = addMedicine(medData);
-    setIsNewItemModalOpen(false);
-
-    setSuccessMessage(
-      `Berhasil menambahkan item baru "${added.name}" (${newItemType === 'obat' ? 'Obat' : 'Non-Obat'}). Harga Jual Kasir: ${formatRupiah(computedSellingPrice)}.`
-    );
-    setIsSuccessAlert(true);
-    setTimeout(() => setIsSuccessAlert(false), 4500);
+    try {
+      const added = await addMedicine(medData);
+      setIsNewItemModalOpen(false);
+      setSuccessMessage(
+        `Berhasil menambahkan item baru "${added.name}" (${newItemType === 'obat' ? 'Obat' : 'Non-Obat'}). Harga Jual Kasir: ${formatRupiah(computedSellingPrice)}.`
+      );
+      setIsSuccessAlert(true);
+      setTimeout(() => setIsSuccessAlert(false), 4500);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(`Gagal menyimpan item baru: ${msg}`);
+      setTimeout(() => setErrorMessage(''), 5000);
+    }
   };
 
   // ==========================================
@@ -655,7 +672,7 @@ export const StockInView: React.FC = () => {
     }
   };
 
-  const handleSingleStockInSubmit = (e: React.FormEvent) => {
+  const handleSingleStockInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedMedId) {
       setErrorMessage('Mohon pilih obat terlebih dahulu.');
@@ -672,7 +689,9 @@ export const StockInView: React.FC = () => {
     if (!targetMed) return;
 
     const mult = targetMed.unit === 'Lusin' ? 12 : (targetMed.unitMultiplier || 1);
-    const totalPcsAdded = singleAmount * mult;
+    // Jumlah qty dihitung sebagai qty (pcs) langsung — tanpa konversi ×12 per lusin.
+    const totalPcsAdded = singleAmount;
+    const qtyLabel = mult > 1 ? `${totalPcsAdded} pcs` : `${singleAmount} ${targetMed.unit || 'unit'}`;
 
     // Evaluate tax classification on form submit
     const isPpn = singleTaxType === 'PPN' || ((targetMed.isPpnIncluded ?? true) && (targetMed.ppnRate ?? 11) > 0);
@@ -686,9 +705,9 @@ export const StockInView: React.FC = () => {
     const marginPct = singleMarginPct;
     const ppnAmountPerUnit = isPpn ? Math.round(hpp - hpp / 1.11) : 0;
 
-    const fullNote = `[RESTOCK ${computedTaxType}] ${singleNote || 'Stok masuk manual'} | Qty: ${singleAmount} ${targetMed.unit || 'unit'}${mult > 1 ? ` (${totalPcsAdded} pcs)` : ''} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Margin: ${marginPct}% | Jual: ${formatRupiah(sell)}`;
+    const fullNote = `[RESTOCK ${computedTaxType}] ${singleNote || 'Stok masuk manual'} | Qty: ${qtyLabel} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Margin: ${marginPct}% | Jual: ${formatRupiah(sell)}`;
 
-    addStock(selectedMedId, totalPcsAdded, fullNote, {
+    await addStock(selectedMedId, totalPcsAdded, fullNote, {
       taxType: computedTaxType,
       purchasePrice: hpp,
       bhpAmount: bhp,
@@ -699,7 +718,7 @@ export const StockInView: React.FC = () => {
     });
 
     setSuccessMessage(
-      `Berhasil menambahkan +${singleAmount} ${targetMed.unit || 'unit'}${mult > 1 ? ` (${totalPcsAdded} pcs)` : ''} stok (${computedTaxType}) untuk "${targetMed.name}"! Margin Laba: ${marginPct}%.`
+      `Berhasil menambahkan +${qtyLabel} stok (${computedTaxType}) untuk "${targetMed.name}"! Margin Laba: ${marginPct}%.`
     );
     setIsSuccessAlert(true);
     setTimeout(() => setIsSuccessAlert(false), 4000);
@@ -933,7 +952,7 @@ export const StockInView: React.FC = () => {
     );
   };
 
-  const handleBulkRestockSubmit = (e: React.FormEvent) => {
+  const handleBulkRestockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const validItems = bulkItems.filter(item => item.medicineId && item.amount > 0);
 
@@ -948,7 +967,9 @@ export const StockInView: React.FC = () => {
     const itemsToAdd = validItems.map(item => {
       const targetMed = medicines.find(m => m.id === item.medicineId);
       const mult = targetMed ? (targetMed.unit === 'Lusin' ? 12 : (targetMed.unitMultiplier || 1)) : 1;
-      const totalPcsAdded = Number(item.amount) * mult;
+      // Jumlah qty dihitung sebagai qty (pcs) langsung — tanpa konversi ×12 per lusin.
+      const totalPcsAdded = Number(item.amount);
+      const qtyLabel = mult > 1 ? `${totalPcsAdded} pcs` : `${item.amount} ${targetMed?.unit || 'unit'}`;
 
       // Determine tax classification on form submit based on item selection or medicine master data
       const isPpn = item.taxType === 'PPN' || (targetMed ? ((targetMed.isPpnIncluded ?? true) && (targetMed.ppnRate ?? 11) > 0) : true);
@@ -960,7 +981,7 @@ export const StockInView: React.FC = () => {
       const ppnAmountPerUnit = isPpn ? Math.round(hpp - hpp / 1.11) : 0;
       const marginPct = item.marginPct;
 
-      const itemNote = `${fullBatchHeader} [Tax: ${computedTaxType} | Qty: ${item.amount} ${targetMed?.unit || 'unit'}${mult > 1 ? ` (${totalPcsAdded} pcs)` : ''} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Jual: ${formatRupiah(sell)} | Margin: ${marginPct}%] ${item.note ? ' - ' + item.note : ''}`;
+      const itemNote = `${fullBatchHeader} [Tax: ${computedTaxType} | Qty: ${qtyLabel} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Jual: ${formatRupiah(sell)} | Margin: ${marginPct}%] ${item.note ? ' - ' + item.note : ''}`;
 
       return {
         medicineId: item.medicineId,
@@ -976,7 +997,7 @@ export const StockInView: React.FC = () => {
       };
     });
 
-    bulkAddStock(itemsToAdd);
+    await bulkAddStock(itemsToAdd);
 
     const totalQty = itemsToAdd.reduce((acc, curr) => acc + curr.amount, 0);
 
@@ -1076,7 +1097,7 @@ export const StockInView: React.FC = () => {
   // ==========================================
   // HANDLERS: OPNAME
   // ==========================================
-  const handleSingleAdjustSubmit = (e: React.FormEvent) => {
+  const handleSingleAdjustSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adjMedId) {
       setErrorMessage('Mohon pilih obat terlebih dahulu.');
@@ -1085,7 +1106,7 @@ export const StockInView: React.FC = () => {
     }
 
     const targetMed = medicines.find(m => m.id === adjMedId);
-    adjustStock(adjMedId, Number(newStock), adjNote || 'Penyesuaian stok opnam');
+    await adjustStock(adjMedId, Number(newStock), adjNote || 'Penyesuaian stok opnam');
 
     setSuccessMessage(
       `Penyesuaian stok opnam untuk "${targetMed?.name || 'Obat'}" berhasil disimpan (Stok fisik baru: ${newStock}).`
@@ -1118,7 +1139,7 @@ export const StockInView: React.FC = () => {
     }));
   };
 
-  const handleBulkOpnameSubmit = (e: React.FormEvent) => {
+  const handleBulkOpnameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const changedMedicines = medicines
@@ -1156,14 +1177,14 @@ export const StockInView: React.FC = () => {
     });
   };
 
-  const handleConfirmBulkOpnameSave = () => {
+  const handleConfirmBulkOpnameSave = async () => {
     const adjustments = opnameConfirmModal.itemsToAdjust.map(item => ({
       medicineId: item.medicineId,
       newStock: item.newStock,
       note: `[BULK OPNAME] ${globalOpnameNote} ${item.note ? '- ' + item.note : ''}`.trim(),
     }));
 
-    bulkAdjustStock(adjustments);
+    await bulkAdjustStock(adjustments);
 
     setBulkOpnameData(prev => {
       const next = { ...prev };
@@ -1908,7 +1929,7 @@ export const StockInView: React.FC = () => {
                       onChange={(e) => setOpnameCategoryFilter(e.target.value)}
                       className="w-full bg-slate-800 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-400 cursor-pointer shadow-inner"
                     >
-                      <option value="all">
+                      <option key="all" value="all">
                         ⚡ Semua Kategori ({medicines.filter(m => m.isActive).length} Obat)
                       </option>
                       {uniqueCategories.map(cat => {
@@ -1999,7 +2020,7 @@ export const StockInView: React.FC = () => {
                         onChange={e => setOpnameCategoryFilter(e.target.value)}
                         className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 font-bold text-slate-800 focus:outline-none"
                       >
-                        <option value="all">Semua Kategori ({medicines.filter(m => m.isActive).length})</option>
+                        <option key="all" value="all">Semua Kategori ({medicines.filter(m => m.isActive).length})</option>
                         {uniqueCategories.map(cat => (
                           <option key={cat} value={cat}>
                             {cat} ({medicines.filter(m => m.isActive && m.category === cat).length})
@@ -2015,7 +2036,7 @@ export const StockInView: React.FC = () => {
                         onChange={e => setOpnameLocationFilter(e.target.value)}
                         className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 font-bold text-slate-800 focus:outline-none"
                       >
-                        <option value="all">Semua Lokasi ({medicines.filter(m => m.isActive).length})</option>
+                        <option key="all" value="all">Semua Lokasi ({medicines.filter(m => m.isActive).length})</option>
                         {uniqueLocations.map(loc => (
                           <option key={loc} value={loc}>
                             {loc} ({medicines.filter(m => m.isActive && m.location === loc).length})
@@ -2615,19 +2636,19 @@ export const StockInView: React.FC = () => {
                   >
                     {newItemType === 'obat' ? (
                       <>
-                        <option value="Obat Bebas">Obat Bebas</option>
-                        <option value="Obat Bebas Terbatas">Obat Bebas Terbatas</option>
-                        <option value="Obat Keras">Obat Keras</option>
-                        <option value="Jamu & Herbal">Jamu & Herbal</option>
-                        <option value="Suplemen & Vitamin">Suplemen & Vitamin</option>
-                        <option value="Alat Kesehatan">Alat Kesehatan</option>
+                        <option key="Obat Bebas" value="Obat Bebas">Obat Bebas</option>
+                        <option key="Obat Bebas Terbatas" value="Obat Bebas Terbatas">Obat Bebas Terbatas</option>
+                        <option key="Obat Keras" value="Obat Keras">Obat Keras</option>
+                        <option key="Jamu & Herbal" value="Jamu & Herbal">Jamu & Herbal</option>
+                        <option key="Suplemen & Vitamin" value="Suplemen & Vitamin">Suplemen & Vitamin</option>
+                        <option key="Alat Kesehatan" value="Alat Kesehatan">Alat Kesehatan</option>
                       </>
                     ) : (
                       <>
-                        <option value="Barang Umum">Barang Umum</option>
-                        <option value="Perawatan & Kosmetik">Perawatan & Kosmetik</option>
-                        <option value="Makanan & Minuman">Makanan & Minuman</option>
-                        <option value="Lainnya">Lainnya</option>
+                        <option key="Barang Umum" value="Barang Umum">Barang Umum</option>
+                        <option key="Perawatan & Kosmetik" value="Perawatan & Kosmetik">Perawatan & Kosmetik</option>
+                        <option key="Makanan & Minuman" value="Makanan & Minuman">Makanan & Minuman</option>
+                        <option key="Lainnya" value="Lainnya">Lainnya</option>
                       </>
                     )}
                   </select>
@@ -2792,14 +2813,14 @@ export const StockInView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleRestockModalSubmit} className="space-y-4 text-xs">
+            <form onSubmit={handleRestockModalSubmit} noValidate className="space-y-4 text-xs">
               {/* Type Switcher */}
               <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
                 <button
                   type="button"
                   onClick={() => {
                     setModalItemType('obat');
-                    const firstMed = medicines.find(m => m.isActive && ((m.itemType || 'obat') === 'obat'));
+                    const firstMed = medicines.find(m => m.id && m.isActive && ((m.itemType || 'obat') === 'obat'));
                     if (firstMed) {
                       handleModalMedSelect(firstMed.id);
                     }
@@ -2814,7 +2835,7 @@ export const StockInView: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setModalItemType('non_obat');
-                    const firstNonMed = medicines.find(m => m.isActive && m.itemType === 'non_obat');
+                    const firstNonMed = medicines.find(m => m.id && m.isActive && m.itemType === 'non_obat');
                     if (firstNonMed) {
                       handleModalMedSelect(firstNonMed.id);
                     }
@@ -2833,15 +2854,14 @@ export const StockInView: React.FC = () => {
                   Pilih Sediaan {modalItemType === 'obat' ? 'Obat' : 'Non-Obat'} <span className="text-rose-500">*</span>
                 </label>
                 <select
-                  required
                   value={modalMedId}
                   onChange={e => handleModalMedSelect(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
                 >
-                  <option value="">-- Pilih Sediaan Barang --</option>
+                  <option key="" value="">-- Pilih Sediaan Barang --</option>
                   {medicines
                     .filter(m => {
-                      if (!m.isActive) return false;
+                      if (!m.id || !m.isActive) return false;
                       if (modalItemType === 'obat') {
                         return (m.itemType || 'obat') === 'obat';
                       } else {
@@ -2963,7 +2983,7 @@ export const StockInView: React.FC = () => {
                     <input
                       type="number"
                       min="0"
-                      required
+                      
                       value={modalPurchasePrice}
                       onChange={e => handleModalPurchasePriceChange(Number(e.target.value))}
                       className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 font-bold text-slate-900 focus:outline-none focus:border-emerald-500 text-xs"
@@ -2998,7 +3018,7 @@ export const StockInView: React.FC = () => {
                     <input
                       type="number"
                       step="0.5"
-                      required
+                      
                       value={modalMarginPct}
                       onChange={e => handleModalMarginPctChange(Number(e.target.value))}
                       className="w-full px-3 py-2 rounded-xl bg-white border border-emerald-400 font-black text-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 text-xs"
@@ -3016,7 +3036,7 @@ export const StockInView: React.FC = () => {
                     <input
                       type="number"
                       min="0"
-                      required
+                      
                       value={modalSellingPrice}
                       onChange={e => handleModalSellingPriceChange(Number(e.target.value))}
                       className="w-full px-3 py-2 rounded-xl bg-white border border-indigo-300 font-extrabold text-indigo-900 focus:outline-none focus:border-indigo-500 text-xs"
@@ -3113,3 +3133,5 @@ export const StockInView: React.FC = () => {
     </div>
   );
 };
+
+

@@ -25,6 +25,8 @@ export const initialSettings: PharmacySettings = {
   defaultPpnRate: 11,
   defaultTaxType: 'PPN',
   defaultPpnIncluded: true,
+  printerName: '',
+  paperWidth: '58mm',
 };
 
 export const initialUsers: User[] = [

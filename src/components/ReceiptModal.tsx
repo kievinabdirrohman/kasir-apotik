@@ -1,15 +1,50 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatRupiah, formatDateTime, formatCashierName, isPpnTransaction } from '../utils/formatters';
+import { buildReceiptHtml } from '../utils/receiptHtml';
 import { Printer, X, CheckCircle, Stethoscope, User, ShoppingBag } from 'lucide-react';
 
 export const ReceiptModal: React.FC = () => {
   const { isReceiptModalOpen, setIsReceiptModalOpen, lastTransaction, settings } = useApp();
+  const didAutoPrint = useRef(false);
+
+  // Auto-print (desktop only): when the receipt opens and the setting is on,
+  // silently send the receipt to the configured thermal printer. Each time the
+  // modal opens we print exactly once.
+  useEffect(() => {
+    if (!isReceiptModalOpen) {
+      didAutoPrint.current = false;
+      return;
+    }
+    if (!lastTransaction || !window.electronAPI || !settings.autoPrintReceipt) return;
+    if (didAutoPrint.current) return;
+    didAutoPrint.current = true;
+    const paperWidth = settings.paperWidth || '58mm';
+    window.electronAPI
+      .printReceipt({
+        html: buildReceiptHtml({ transaction: lastTransaction, settings, paperWidth }),
+        paperWidth,
+        printerName: settings.printerName || undefined,
+      })
+      .catch(() => {
+        /* printing failures must never block the receipt modal */
+      });
+  }, [isReceiptModalOpen, lastTransaction, settings]);
 
   if (!isReceiptModalOpen || !lastTransaction) return null;
 
   const handlePrint = () => {
-    window.print();
+    if (window.electronAPI) {
+      const paperWidth = settings.paperWidth || '58mm';
+      window.electronAPI.printReceipt({
+        html: buildReceiptHtml({ transaction: lastTransaction, settings, paperWidth }),
+        paperWidth,
+        printerName: settings.printerName || undefined,
+      });
+    } else {
+      // Web mode: keep the original browser print behaviour
+      window.print();
+    }
   };
 
   return (

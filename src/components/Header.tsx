@@ -7,7 +7,6 @@ import {
   Menu,
   ShoppingCart,
   Store,
-  RefreshCw,
   User,
   ChevronRight,
   LogOut,
@@ -30,6 +29,7 @@ const tabTitles: Record<string, string> = {
   reports: 'Laporan Operasional',
   users: 'Pengguna',
   settings: 'Pengaturan',
+  tutorial: 'Panduan',
 };
 
 export const Header: React.FC<HeaderProps> = ({ onToggleSidebar }) => {
@@ -39,10 +39,8 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar }) => {
     setActiveTab,
     currentUser,
     logout,
-    resetToDefaultData,
   } = useApp();
 
-  const [showResetModal, setShowResetModal] = useState(false);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
 
   return (
@@ -166,16 +164,6 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar }) => {
             <span className="hidden md:inline">Keluar</span>
           </button>
 
-          {/* Reset Seed Helper (Desktop view only) */}
-          <button
-            type="button"
-            onClick={() => setShowResetModal(true)}
-            className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 active:bg-slate-200 rounded-xl transition-colors hidden lg:flex"
-            title="Reset Data Sampel Awal"
-            aria-label="Reset Data Sampel"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
         </div>
       </div>
     </header>
@@ -185,44 +173,6 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar }) => {
       isOpen={showEditProfileModal}
       onClose={() => setShowEditProfileModal(false)}
     />
-
-    {/* Reset Confirmation Modal */}
-    {showResetModal && (
-      <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-        <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-6">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4 text-left my-auto animate-in fade-in duration-200">
-          <div className="flex items-start gap-3">
-            <div className="p-3 bg-amber-100 text-amber-600 rounded-2xl shrink-0">
-              <RefreshCw className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="font-bold text-slate-900 text-base">Reset Data Sampel</h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Kembalikan seluruh data obat, transaksi, dan pelanggan ke sampel awal apotek?
-              </p>
-            </div>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              onClick={() => setShowResetModal(false)}
-              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
-            >
-              Batal
-            </button>
-            <button
-              onClick={() => {
-                resetToDefaultData();
-                setShowResetModal(false);
-              }}
-              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold"
-            >
-              Ya, Reset Sampel
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-    )}
   </>
 );
 };

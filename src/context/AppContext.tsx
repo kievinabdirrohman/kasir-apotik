@@ -12,16 +12,35 @@ import {
   CashFlow,
 } from '../types';
 import {
-  initialMedicines,
-  initialCustomers,
-  initialDoctors,
   initialUsers,
-  initialTransactions,
-  initialStockHistory,
   initialSettings,
 } from '../data/initialData';
 import { getDaysUntilExpired, getWIBDateTimeString, getWIBDateString } from '../utils/formatters';
 import { validatePasswordStrength } from '../utils/authUtils';
+import {
+  initializeApp,
+  resetData,
+  getMedicines,
+  getStockHistory,
+  addStockHistory,
+  createTransaction as apiCreateTransaction,
+  cancelTransaction as apiCancelTransaction,
+  addMedicine as apiAddMedicine,
+  updateMedicine as apiUpdateMedicine,
+  deleteMedicine as apiDeleteMedicine,
+  addCustomer as apiAddCustomer,
+  updateCustomer as apiUpdateCustomer,
+  deleteCustomer as apiDeleteCustomer,
+  addDoctor as apiAddDoctor,
+  updateDoctor as apiUpdateDoctor,
+  deleteDoctor as apiDeleteDoctor,
+  addUser as apiAddUser,
+  updateUser as apiUpdateUser,
+  deleteUser as apiDeleteUser,
+  updateSettings as apiUpdateSettings,
+  addCashFlow as apiAddCashFlow,
+  deleteCashFlow as apiDeleteCashFlow,
+} from '../services/api';
 
 interface AppContextType {
   // Navigation & User Role
@@ -52,14 +71,14 @@ interface AppContextType {
   cashFlows: CashFlow[];
 
   // CashFlow Actions
-  addCashFlow: (cashFlow: Omit<CashFlow, 'id' | 'date' | 'recordedBy'>) => void;
-  deleteCashFlow: (id: string) => void;
+  addCashFlow: (cashFlow: Omit<CashFlow, 'id' | 'date' | 'recordedBy'>) => Promise<void>;
+  deleteCashFlow: (id: string) => Promise<void>;
 
   // Medicine Actions
-  addMedicine: (medicine: Omit<Medicine, 'id'>) => Medicine;
-  updateMedicine: (id: string, medicine: Partial<Medicine>) => void;
-  deleteMedicine: (id: string) => void;
-  restoreMedicine: (id: string) => void;
+  addMedicine: (medicine: Omit<Medicine, 'id'>) => Promise<Medicine>;
+  updateMedicine: (id: string, medicine: Partial<Medicine>) => Promise<void>;
+  deleteMedicine: (id: string) => Promise<void>;
+  restoreMedicine: (id: string) => Promise<void>;
 
   // Stock In & Adjustment Actions
   addStock: (
@@ -74,9 +93,9 @@ interface AppContextType {
       marginPct?: number;
       updateMedicineMaster?: boolean;
     }
-  ) => void;
-  adjustStock: (medicineId: string, newStock: number, note: string) => void;
-  bulkAdjustStock: (adjustments: { medicineId: string; newStock: number; note: string }[]) => void;
+  ) => Promise<void>;
+  adjustStock: (medicineId: string, newStock: number, note: string) => Promise<void>;
+  bulkAdjustStock: (adjustments: { medicineId: string; newStock: number; note: string }[]) => Promise<void>;
   bulkAddStock: (
     items: {
       medicineId: string;
@@ -89,17 +108,17 @@ interface AppContextType {
       marginPct?: number;
       updateMedicineMaster?: boolean;
     }[]
-  ) => void;
+  ) => Promise<void>;
 
   // Customer Actions
-  addCustomer: (customer: Omit<Customer, 'id' | 'memberNo' | 'totalSpent' | 'totalTransactions' | 'createdAt'>) => Customer;
-  updateCustomer: (id: string, customer: Partial<Customer>) => void;
-  deleteCustomer: (id: string) => void;
+  addCustomer: (customer: Omit<Customer, 'id' | 'memberNo' | 'totalSpent' | 'totalTransactions' | 'createdAt'>) => Promise<Customer>;
+  updateCustomer: (id: string, customer: Partial<Customer>) => Promise<void>;
+  deleteCustomer: (id: string) => Promise<void>;
 
   // Doctor Actions
-  addDoctor: (doctor: Omit<Doctor, 'id' | 'totalPrescriptions' | 'createdAt'>) => Doctor;
-  updateDoctor: (id: string, doctor: Partial<Doctor>) => void;
-  deleteDoctor: (id: string) => void;
+  addDoctor: (doctor: Omit<Doctor, 'id' | 'totalPrescriptions' | 'createdAt'>) => Promise<Doctor>;
+  updateDoctor: (id: string, doctor: Partial<Doctor>) => Promise<void>;
+  deleteDoctor: (id: string) => Promise<void>;
 
   // Transaction / POS Actions
   createTransaction: (data: {
@@ -118,15 +137,15 @@ interface AppContextType {
     taxType?: 'PPN' | 'NON_PPN';
     ppnRate?: number;
     isPpnIncluded?: boolean;
-  }) => Transaction;
-  cancelTransaction: (transactionId: string, reason: string) => void;
+  }) => Promise<Transaction>;
+  cancelTransaction: (transactionId: string, reason: string) => Promise<void>;
 
   // User & Settings Actions
-  addUser: (user: Omit<User, 'id' | 'createdAt'> & { password?: string }) => { success: boolean; message: string };
-  updateUser: (id: string, user: Partial<User>) => { success: boolean; message: string };
-  deleteUser: (id: string) => { success: boolean; message: string };
-  updateSettings: (newSettings: Partial<PharmacySettings>) => void;
-  resetToDefaultData: () => void;
+  addUser: (user: Omit<User, 'id' | 'createdAt'> & { password?: string }) => Promise<{ success: boolean; message: string }>;
+  updateUser: (id: string, user: Partial<User>) => Promise<{ success: boolean; message: string }>;
+  deleteUser: (id: string) => Promise<{ success: boolean; message: string }>;
+  updateSettings: (newSettings: Partial<PharmacySettings>) => Promise<void>;
+  resetToDefaultData: () => Promise<void>;
 
   // Computed Alert Counters
   lowStockCount: number;
@@ -142,19 +161,13 @@ interface AppContextType {
   setLastTransaction: (trx: Transaction | null) => void;
   isReceiptModalOpen: boolean;
   setIsReceiptModalOpen: (open: boolean) => void;
+
+  // Async init state
+  isLoading: boolean;
+  apiError: string | null;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-
-function getInitialStorage<T>(key: string, defaultValue: T): T {
-  try {
-    const item = localStorage.getItem(key);
-    return item ? JSON.parse(item) : defaultValue;
-  } catch (e) {
-    console.error(`Error loading localStorage key "${key}":`, e);
-    return defaultValue;
-  }
-}
 
 // Ensure old sample data in localStorage is wiped once for clean testing
 if (typeof window !== 'undefined' && localStorage.getItem('apotek_clean_init_v7') !== 'true') {
@@ -171,113 +184,87 @@ if (typeof window !== 'undefined' && localStorage.getItem('apotek_clean_init_v7'
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
 
-  const [users, setUsers] = useState<User[]>(() => {
-    const stored = getInitialStorage<User[]>('apotek_users', initialUsers);
-    // Ensure Super Admin exists
-    const hasSuperAdmin = stored.some(u => u.isSuperAdmin || u.id === 'usr-superadmin' || u.username === 'superadmin');
-    const baseList = hasSuperAdmin ? stored : [initialUsers[0], ...stored];
-
-    return baseList.map(u => {
-      const matchInitial = initialUsers.find(i => i.id === u.id || i.username === u.username);
-      return {
-        ...u,
-        password: u.password || matchInitial?.password || 'Apotek#2026!',
-        isSuperAdmin: u.isSuperAdmin ?? (u.id === 'usr-superadmin' || u.username === 'superadmin'),
-      };
-    });
-  });
+  const [users, setUsers] = useState<User[]>(initialUsers);
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const active = getInitialStorage<User | null>('apotek_active_user', null);
+    const active = sessionStorage.getItem('apotek_active_user');
     if (!active) return null;
-    const found = users.find(u => u.id === active.id || u.username === active.username);
-    if (found && found.status === 'aktif') {
-      return found;
+    try {
+      return JSON.parse(active) as User;
+    } catch {
+      return null;
     }
-    return null;
   });
 
-  const [settings, setSettings] = useState<PharmacySettings>(() =>
-    getInitialStorage('apotek_settings', initialSettings)
-  );
+  const [settings, setSettings] = useState<PharmacySettings>(initialSettings);
 
-  const [medicines, setMedicines] = useState<Medicine[]>(() => {
-    const rawMeds = getInitialStorage<Medicine[]>('apotek_medicines', initialMedicines);
-    return rawMeds.map(med => {
-      if (med.unit === 'Lusin') {
-        return {
-          ...med,
-          unitMultiplier: 12,
-        };
-      }
-      return med;
-    });
-  });
+  const [medicines, setMedicines] = useState<Medicine[]>([]);
 
-  const [customers, setCustomers] = useState<Customer[]>(() =>
-    getInitialStorage('apotek_customers', initialCustomers)
-  );
+  const [customers, setCustomers] = useState<Customer[]>([]);
 
-  const [doctors, setDoctors] = useState<Doctor[]>(() =>
-    getInitialStorage('apotek_doctors', initialDoctors)
-  );
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
 
-  const [transactions, setTransactions] = useState<Transaction[]>(() =>
-    getInitialStorage('apotek_transactions', initialTransactions)
-  );
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
 
-  const [stockHistory, setStockHistory] = useState<StockHistory[]>(() =>
-    getInitialStorage('apotek_stock_history', initialStockHistory)
-  );
+  const [stockHistory, setStockHistory] = useState<StockHistory[]>([]);
 
-  const [cashFlows, setCashFlows] = useState<CashFlow[]>(() =>
-    getInitialStorage('apotek_cash_flows', [])
-  );
+  const [cashFlows, setCashFlows] = useState<CashFlow[]>([]);
+
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState<boolean>(false);
 
-  // Sync state to LocalStorage
+  // API init on mount — load all collections from SQLite server
   useEffect(() => {
-    localStorage.setItem('apotek_users', JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('apotek_active_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('apotek_active_user');
+    async function init() {
+      try {
+        const data = await initializeApp();
+        if (
+          data.medicines.length === 0 &&
+          data.users.length === 0 &&
+          localStorage.getItem('apotek_migrated_to_sqlite') !== 'true'
+        ) {
+          // Empty DB and not yet seeded — load initial data
+          const { initialMedicines, initialCustomers, initialDoctors, initialTransactions, initialStockHistory } = await import('../data/initialData');
+          await resetData({
+            settings: initialSettings,
+            users: initialUsers,
+            medicines: initialMedicines,
+            customers: initialCustomers,
+            doctors: initialDoctors,
+            transactions: initialTransactions,
+            stockHistory: initialStockHistory,
+            cashFlows: [],
+          });
+          const seeded = await initializeApp();
+          setMedicines(seeded.medicines);
+          setCustomers(seeded.customers);
+          setDoctors(seeded.doctors);
+          setUsers(seeded.users);
+          setTransactions(seeded.transactions);
+          setStockHistory(seeded.stockHistory);
+          setCashFlows(seeded.cashFlows);
+          setSettings(seeded.settings);
+        } else {
+          setMedicines(data.medicines);
+          setCustomers(data.customers);
+          setDoctors(data.doctors);
+          setUsers(data.users);
+          setTransactions(data.transactions);
+          setStockHistory(data.stockHistory);
+          setCashFlows(data.cashFlows);
+          setSettings(data.settings);
+        }
+      } catch (err: unknown) {
+        setApiError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setIsLoading(false);
+      }
     }
-  }, [currentUser]);
-
-  useEffect(() => {
-    localStorage.setItem('apotek_settings', JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    localStorage.setItem('apotek_medicines', JSON.stringify(medicines));
-  }, [medicines]);
-
-  useEffect(() => {
-    localStorage.setItem('apotek_customers', JSON.stringify(customers));
-  }, [customers]);
-
-  useEffect(() => {
-    localStorage.setItem('apotek_doctors', JSON.stringify(doctors));
-  }, [doctors]);
-
-  useEffect(() => {
-    localStorage.setItem('apotek_transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
-  useEffect(() => {
-    localStorage.setItem('apotek_stock_history', JSON.stringify(stockHistory));
-  }, [stockHistory]);
-
-  useEffect(() => {
-    localStorage.setItem('apotek_cash_flows', JSON.stringify(cashFlows));
-  }, [cashFlows]);
-
+    init();
+  }, []);
   // Computed Notification Counts
   const lowStockCount = medicines.filter(m => m.stock <= m.minStock && m.isActive).length;
   
@@ -312,67 +299,54 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }).length;
 
   // Medicine Actions
-  const addMedicine = (medData: Omit<Medicine, 'id'>): Medicine => {
-    const newMed: Medicine = {
-      ...medData,
-      id: `med-${Date.now()}`,
-    };
-    setMedicines(prev => [newMed, ...prev]);
-
-    // Record initial stock entry
+  const addMedicine = async (medData: Omit<Medicine, 'id'>): Promise<Medicine> => {
+    const created = await apiAddMedicine(medData);
+    setMedicines(prev => [created, ...prev]);
+    // Record initial stock entry locally (no POST /api/stock_history endpoint)
     if (medData.stock > 0) {
       const historyItem: StockHistory = {
         id: `sh-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        medicineId: newMed.id,
-        medicineCode: newMed.code,
-        medicineName: newMed.name,
+        medicineId: created.id,
+        medicineCode: created.code,
+        medicineName: created.name,
         type: 'masuk',
         amount: medData.stock,
         prevStock: 0,
         newStock: medData.stock,
         date: getWIBDateTimeString(),
-        note: `Stok awal ${newMed.itemType === 'non_obat' ? 'barang non-obat' : 'obat'} baru`,
+        note: `Stok awal ${created.itemType === 'non_obat' ? 'barang non-obat' : 'obat'} baru`,
         user: currentUser?.name || 'Sistem',
-        taxType: (newMed.isPpnIncluded ?? true) && (newMed.ppnRate ?? 11) > 0 ? 'PPN' : 'NON_PPN',
-        purchasePrice: newMed.purchasePrice,
-        sellingPrice: newMed.price,
-        marginPct: newMed.marginPct,
-        bhpAmount: newMed.bhpAmount,
-        itemType: newMed.itemType || 'obat',
+        taxType: (created.isPpnIncluded ?? true) && (created.ppnRate ?? 11) > 0 ? 'PPN' : 'NON_PPN',
+        purchasePrice: created.purchasePrice,
+        sellingPrice: created.price,
+        marginPct: created.marginPct,
+        bhpAmount: created.bhpAmount,
+        itemType: created.itemType || 'obat',
       };
       setStockHistory(prev => [historyItem, ...prev]);
     }
-    return newMed;
+    return created;
   };
 
-  const updateMedicine = (id: string, updatedFields: Partial<Medicine>) => {
-    setMedicines(prev =>
-      prev.map(m => (m.id === id ? { ...m, ...updatedFields } : m))
-    );
+  const updateMedicine = async (id: string, updatedFields: Partial<Medicine>): Promise<void> => {
+    const updated = await apiUpdateMedicine(id, updatedFields);
+    setMedicines(prev => prev.map(m => m.id === id ? updated : m));
   };
 
-  // Safe delete function: Soft-deletes medicine by marking isActive: false
-  // so that historical transaction reports, financial statements, and HPP calculations remain 100% intact!
-  const deleteMedicine = (id: string) => {
-    // Check if medicine has transactions or stock history
-    const hasTransactions = transactions.some(t => t.items.some(it => it.medicineId === id));
-    const hasHistory = stockHistory.some(sh => sh.medicineId === id);
-
-    if (hasTransactions || hasHistory) {
-      // Soft delete / archive to preserve historical sales & financial reports
-      setMedicines(prev => prev.map(m => (m.id === id ? { ...m, isActive: false } : m)));
-    } else {
-      // If no historical records exist, can safely remove
-      setMedicines(prev => prev.filter(m => m.id !== id));
-    }
+  // Safe delete: server handles soft/hard delete logic; refresh for authoritative state
+  const deleteMedicine = async (id: string): Promise<void> => {
+    await apiDeleteMedicine(id);
+    const fresh = await getMedicines();
+    setMedicines(fresh);
   };
 
-  const restoreMedicine = (id: string) => {
-    setMedicines(prev => prev.map(m => (m.id === id ? { ...m, isActive: true } : m)));
+  const restoreMedicine = async (id: string): Promise<void> => {
+    const updated = await apiUpdateMedicine(id, { isActive: true });
+    setMedicines(prev => prev.map(m => m.id === id ? updated : m));
   };
 
   // Stock Actions
-  const addStock = (
+  const addStock = async (
     medicineId: string,
     amount: number,
     note: string,
@@ -385,7 +359,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       marginPct?: number;
       updateMedicineMaster?: boolean;
     }
-  ) => {
+  ): Promise<void> => {
     const target = medicines.find(m => m.id === medicineId);
     if (!target) return;
 
@@ -420,115 +394,114 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     }
 
-    updateMedicine(medicineId, updateData);
+    try {
+      const updated = await apiUpdateMedicine(medicineId, updateData);
+      setMedicines(prev => prev.map(m => m.id === medicineId ? updated : m));
 
-    const historyItem: StockHistory = {
-      id: `sh-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      medicineId: target.id,
-      medicineCode: target.code,
-      medicineName: target.name,
-      type: 'masuk',
-      amount,
-      prevStock,
-      newStock,
-      date: getWIBDateTimeString(),
-      note: note || 'Stok masuk manual',
-      user: currentUser?.name || 'Sistem',
-      taxType: details?.taxType,
-      purchasePrice: details?.purchasePrice,
-      sellingPrice: details?.sellingPrice,
-      ppnAmount: details?.ppnAmount,
-      marginPct: details?.marginPct,
-      itemType: target.itemType || 'obat',
-    };
-
-    setStockHistory(prev => [historyItem, ...prev]);
+      const historyItem: Omit<StockHistory, 'id'> = {
+        medicineId: target.id,
+        medicineCode: target.code,
+        medicineName: target.name,
+        type: 'masuk',
+        amount,
+        prevStock,
+        newStock,
+        date: getWIBDateTimeString(),
+        note: note || 'Stok masuk manual',
+        user: currentUser?.name || 'Sistem',
+        taxType: details?.taxType,
+        purchasePrice: details?.purchasePrice,
+        sellingPrice: details?.sellingPrice,
+        ppnAmount: details?.ppnAmount,
+        marginPct: details?.marginPct,
+        itemType: target.itemType || 'obat',
+      };
+      const saved = await addStockHistory(historyItem);
+      setStockHistory(prev => [saved, ...prev]);
+    } catch (err) {
+      console.error('addStock failed:', err);
+    }
   };
 
-  const adjustStock = (medicineId: string, newStock: number, note: string) => {
+  const adjustStock = async (medicineId: string, newStock: number, note: string): Promise<void> => {
     const target = medicines.find(m => m.id === medicineId);
     if (!target) return;
 
     const prevStock = target.stock;
     const diff = newStock - prevStock;
 
-    updateMedicine(medicineId, { stock: newStock });
+    try {
+      const updated = await apiUpdateMedicine(medicineId, { stock: newStock });
+      setMedicines(prev => prev.map(m => m.id === medicineId ? updated : m));
 
-    const isPpn = (target.isPpnIncluded ?? true) && (target.ppnRate ?? 11) > 0;
-
-    const historyItem: StockHistory = {
-      id: `sh-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      medicineId: target.id,
-      medicineCode: target.code,
-      medicineName: target.name,
-      type: 'penyesuaian',
-      amount: diff,
-      prevStock,
-      newStock,
-      date: getWIBDateTimeString(),
-      note: note || 'Penyesuaian stok opnam',
-      user: currentUser?.name || 'Sistem',
-      taxType: isPpn ? 'PPN' : 'NON_PPN',
-      purchasePrice: target.purchasePrice,
-      sellingPrice: target.price,
-    };
-
-    setStockHistory(prev => [historyItem, ...prev]);
+      const isPpn = (target.isPpnIncluded ?? true) && (target.ppnRate ?? 11) > 0;
+      const historyItem: Omit<StockHistory, 'id'> = {
+        medicineId: target.id,
+        medicineCode: target.code,
+        medicineName: target.name,
+        type: 'penyesuaian',
+        amount: diff,
+        prevStock,
+        newStock,
+        date: getWIBDateTimeString(),
+        note: note || 'Penyesuaian stok opnam',
+        user: currentUser?.name || 'Sistem',
+        taxType: isPpn ? 'PPN' : 'NON_PPN',
+        purchasePrice: target.purchasePrice,
+        sellingPrice: target.price,
+      };
+      const saved = await addStockHistory(historyItem);
+      setStockHistory(prev => [saved, ...prev]);
+    } catch (err) {
+      console.error('adjustStock failed:', err);
+    }
   };
 
-  const bulkAdjustStock = (adjustments: { medicineId: string; newStock: number; note: string }[]) => {
+  const bulkAdjustStock = async (adjustments: { medicineId: string; newStock: number; note: string }[]): Promise<void> => {
     if (adjustments.length === 0) return;
 
     const dateStr = getWIBDateTimeString();
-    const updatedMedMap = new Map<string, { newStock: number; note: string }>();
-    adjustments.forEach(adj => {
-      updatedMedMap.set(adj.medicineId, { newStock: adj.newStock, note: adj.note });
-    });
-
     const newHistoryItems: StockHistory[] = [];
 
-    medicines.forEach(m => {
-      if (updatedMedMap.has(m.id)) {
-        const { newStock, note } = updatedMedMap.get(m.id)!;
+    for (const adj of adjustments) {
+      const m = medicines.find(med => med.id === adj.medicineId);
+      if (!m) continue;
+      try {
+        const updated = await apiUpdateMedicine(adj.medicineId, { stock: adj.newStock });
         const prevStock = m.stock;
-        const diff = newStock - prevStock;
+        const diff = adj.newStock - prevStock;
         const isPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
 
-        newHistoryItems.push({
-          id: `sh-${Date.now()}-${m.id}-${Math.random().toString(36).substring(2, 7)}`,
+        setMedicines(prev => prev.map(med => med.id === adj.medicineId ? updated : med));
+
+        const historyData: Omit<StockHistory, 'id'> = {
           medicineId: m.id,
           medicineCode: m.code,
           medicineName: m.name,
           type: 'penyesuaian',
           amount: diff,
           prevStock,
-          newStock,
+          newStock: adj.newStock,
           date: dateStr,
-          note: note || 'Penyesuaian stok opnam bulk',
+          note: adj.note || 'Penyesuaian stok opnam bulk',
           user: currentUser?.name || 'Sistem',
           taxType: isPpn ? 'PPN' : 'NON_PPN',
           purchasePrice: m.purchasePrice,
           sellingPrice: m.price,
-        });
+        };
+        const saved = await addStockHistory(historyData);
+        newHistoryItems.push(saved);
+      } catch (err) {
+        console.error(`bulkAdjustStock failed for ${adj.medicineId}:`, err);
       }
-    });
-
-    setMedicines(prevMeds => {
-      return prevMeds.map(m => {
-        if (updatedMedMap.has(m.id)) {
-          const { newStock } = updatedMedMap.get(m.id)!;
-          return { ...m, stock: newStock };
-        }
-        return m;
-      });
-    });
+    }
 
     if (newHistoryItems.length > 0) {
       setStockHistory(prev => [...newHistoryItems, ...prev]);
     }
   };
 
-  const bulkAddStock = (
+  const bulkAddStock = async (
     items: {
       medicineId: string;
       amount: number;
@@ -541,35 +514,52 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       marginPct?: number;
       updateMedicineMaster?: boolean;
     }[]
-  ) => {
+  ): Promise<void> => {
     if (items.length === 0) return;
 
     const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-
-    const addMap = new Map<
-      string,
-      {
-        totalAmount: number;
-        lastItem: typeof items[0];
-      }
-    >();
-
-    items.forEach(it => {
-      const existing = addMap.get(it.medicineId) || { totalAmount: 0, lastItem: it };
-      existing.totalAmount += it.amount;
-      existing.lastItem = it;
-      addMap.set(it.medicineId, existing);
-    });
-
     const newHistoryItems: StockHistory[] = [];
 
-    items.forEach(it => {
+    for (const it of items) {
       const target = medicines.find(m => m.id === it.medicineId);
-      if (target) {
-        const prevStock = target.stock;
-        const newStock = prevStock + it.amount;
-        newHistoryItems.push({
-          id: `sh-${Date.now()}-${it.medicineId}-${Math.random().toString(36).substring(2, 7)}`,
+      if (!target) continue;
+
+      const prevStock = target.stock;
+      const newStock = prevStock + it.amount;
+
+      const updateData: Partial<Medicine> = { stock: newStock };
+      if (it.updateMedicineMaster) {
+        if (it.purchasePrice !== undefined && it.purchasePrice >= 0) updateData.purchasePrice = it.purchasePrice;
+        if (it.bhpAmount !== undefined && it.bhpAmount >= 0) updateData.bhpAmount = it.bhpAmount;
+        if (it.marginPct !== undefined) updateData.marginPct = it.marginPct;
+        if (it.sellingPrice !== undefined && it.sellingPrice > 0) updateData.price = it.sellingPrice;
+        if (it.taxType) {
+          const isPpn = it.taxType === 'PPN';
+          updateData.isPpnIncluded = isPpn;
+          updateData.ppnRate = isPpn ? 11 : 0;
+
+          const purchase = it.purchasePrice ?? target.purchasePrice ?? 0;
+          const sell = it.sellingPrice ?? target.price ?? 0;
+
+          if (isPpn) {
+            updateData.purchasePriceIncPpn = purchase;
+            updateData.purchasePriceNonPpn = Math.round(purchase / 1.11);
+            updateData.priceIncPpn = sell;
+            updateData.priceNonPpn = Math.round(sell / 1.11);
+          } else {
+            updateData.purchasePriceNonPpn = purchase;
+            updateData.purchasePriceIncPpn = Math.round(purchase * 1.11);
+            updateData.priceNonPpn = sell;
+            updateData.priceIncPpn = Math.round(sell * 1.11);
+          }
+        }
+      }
+
+      try {
+        const updated = await apiUpdateMedicine(it.medicineId, updateData);
+        setMedicines(prev => prev.map(m => m.id === it.medicineId ? updated : m));
+
+        const historyData: Omit<StockHistory, 'id'> = {
           medicineId: target.id,
           medicineCode: target.code,
           medicineName: target.name,
@@ -586,54 +576,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           ppnAmount: it.ppnAmount,
           marginPct: it.marginPct,
           itemType: target.itemType || 'obat',
-        });
+        };
+        const saved = await addStockHistory(historyData);
+        newHistoryItems.push(saved);
+      } catch (err) {
+        console.error(`bulkAddStock failed for ${it.medicineId}:`, err);
       }
-    });
-
-    setMedicines(prevMeds => {
-      return prevMeds.map(m => {
-        if (addMap.has(m.id)) {
-          const { totalAmount, lastItem } = addMap.get(m.id)!;
-          const newMed = { ...m, stock: m.stock + totalAmount };
-          if (lastItem?.updateMedicineMaster) {
-            if (lastItem.purchasePrice !== undefined && lastItem.purchasePrice >= 0) {
-              newMed.purchasePrice = lastItem.purchasePrice;
-            }
-            if (lastItem.bhpAmount !== undefined && lastItem.bhpAmount >= 0) {
-              newMed.bhpAmount = lastItem.bhpAmount;
-            }
-            if (lastItem.marginPct !== undefined) {
-              newMed.marginPct = lastItem.marginPct;
-            }
-            if (lastItem.sellingPrice !== undefined && lastItem.sellingPrice > 0) {
-              newMed.price = lastItem.sellingPrice;
-            }
-            if (lastItem.taxType) {
-              const isPpn = lastItem.taxType === 'PPN';
-              newMed.isPpnIncluded = isPpn;
-              newMed.ppnRate = isPpn ? 11 : 0;
-
-              const purchase = lastItem.purchasePrice ?? m.purchasePrice ?? 0;
-              const sell = lastItem.sellingPrice ?? m.price ?? 0;
-
-              if (isPpn) {
-                newMed.purchasePriceIncPpn = purchase;
-                newMed.purchasePriceNonPpn = Math.round(purchase / 1.11);
-                newMed.priceIncPpn = sell;
-                newMed.priceNonPpn = Math.round(sell / 1.11);
-              } else {
-                newMed.purchasePriceNonPpn = purchase;
-                newMed.purchasePriceIncPpn = Math.round(purchase * 1.11);
-                newMed.priceNonPpn = sell;
-                newMed.priceIncPpn = Math.round(sell * 1.11);
-              }
-            }
-          }
-          return newMed;
-        }
-        return m;
-      });
-    });
+    }
 
     if (newHistoryItems.length > 0) {
       setStockHistory(prev => [...newHistoryItems, ...prev]);
@@ -641,51 +590,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Customer Actions
-  const addCustomer = (data: Omit<Customer, 'id' | 'memberNo' | 'totalSpent' | 'totalTransactions' | 'createdAt'>): Customer => {
+  const addCustomer = async (data: Omit<Customer, 'id' | 'memberNo' | 'totalSpent' | 'totalTransactions' | 'createdAt'>): Promise<Customer> => {
     const memberCount = customers.length + 1;
     const memberNo = `MBR-${String(memberCount).padStart(3, '0')}`;
-    const newCust: Customer = {
-      ...data,
-      id: `cust-${Date.now()}`,
-      memberNo,
-      totalSpent: 0,
-      totalTransactions: 0,
-      createdAt: getWIBDateString(),
-    };
-    setCustomers(prev => [newCust, ...prev]);
-    return newCust;
+    const created = await apiAddCustomer({ ...data, memberNo, totalSpent: 0, totalTransactions: 0, createdAt: getWIBDateString() });
+    setCustomers(prev => [created, ...prev]);
+    return created;
   };
 
-  const updateCustomer = (id: string, data: Partial<Customer>) => {
-    setCustomers(prev => prev.map(c => (c.id === id ? { ...c, ...data } : c)));
+  const updateCustomer = async (id: string, data: Partial<Customer>): Promise<void> => {
+    const updated = await apiUpdateCustomer(id, data);
+    setCustomers(prev => prev.map(c => c.id === id ? updated : c));
   };
 
-  const deleteCustomer = (id: string) => {
+  const deleteCustomer = async (id: string): Promise<void> => {
+    await apiDeleteCustomer(id);
     setCustomers(prev => prev.filter(c => c.id !== id));
   };
 
   // Doctor Actions
-  const addDoctor = (data: Omit<Doctor, 'id' | 'totalPrescriptions' | 'createdAt'>): Doctor => {
-    const newDoc: Doctor = {
-      ...data,
-      id: `doc-${Date.now()}`,
-      totalPrescriptions: 0,
-      createdAt: getWIBDateString(),
-    };
-    setDoctors(prev => [newDoc, ...prev]);
-    return newDoc;
+  const addDoctor = async (data: Omit<Doctor, 'id' | 'totalPrescriptions' | 'createdAt'>): Promise<Doctor> => {
+    const created = await apiAddDoctor({ ...data, totalPrescriptions: 0, createdAt: getWIBDateString() });
+    setDoctors(prev => [created, ...prev]);
+    return created;
   };
 
-  const updateDoctor = (id: string, data: Partial<Doctor>) => {
-    setDoctors(prev => prev.map(d => (d.id === id ? { ...d, ...data } : d)));
+  const updateDoctor = async (id: string, data: Partial<Doctor>): Promise<void> => {
+    const updated = await apiUpdateDoctor(id, data);
+    setDoctors(prev => prev.map(d => d.id === id ? updated : d));
   };
 
-  const deleteDoctor = (id: string) => {
+  const deleteDoctor = async (id: string): Promise<void> => {
+    await apiDeleteDoctor(id);
     setDoctors(prev => prev.filter(d => d.id !== id));
   };
 
   // Transaction / POS Execution
-  const createTransaction = ({
+  const createTransaction = async ({
     items,
     customerId,
     doctorId,
@@ -717,7 +658,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     taxType?: 'PPN' | 'NON_PPN';
     ppnRate?: number;
     isPpnIncluded?: boolean;
-  }): Transaction => {
+  }): Promise<Transaction> => {
     const todayStr = new Date().toISOString().replace(/-/g, '').substring(0, 8);
     const countToday = transactions.filter(t => t.trxNo.includes(todayStr)).length + 1;
     const trxNo = `TRX-${todayStr}-${String(countToday).padStart(3, '0')}`;
@@ -858,148 +799,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       isPpnIncluded,
     };
 
-    // 1. Subtract stocks & add stock history atomically
-    const newHistories: StockHistory[] = [];
+    // Delegate to server: atomic stock deduction + stock_history + customer/doctor metrics
+    const { id: _omit, ...transactionPayload } = newTransaction;
+    const saved = await apiCreateTransaction(transactionPayload as Omit<Transaction, 'id'>);
 
-    items.forEach(item => {
-      const med = medicines.find(m => m.id === item.medicineId);
-      if (med) {
-        const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || (med.unit === 'Lusin' ? 12 : 1));
-        const qtyToDeduct = item.qty * multiplier;
-        const prevStock = med.stock;
-        const newStock = Math.max(0, prevStock - qtyToDeduct);
+    // Refresh authoritative state from server
+    const [freshMeds, freshHistory] = await Promise.all([getMedicines(), getStockHistory()]);
+    setMedicines(freshMeds);
+    setStockHistory(freshHistory);
+    setTransactions(prev => [saved, ...prev]);
+    setLastTransaction(saved);
 
-        newHistories.push({
-          id: `sh-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${med.id}`,
-          medicineId: med.id,
-          medicineCode: med.code,
-          medicineName: med.name,
-          type: 'keluar',
-          amount: qtyToDeduct,
-          prevStock,
-          newStock,
-          date: nowFormatted,
-          note: `Penjualan ${trxNo} (${item.qty} ${item.unit}${multiplier > 1 ? ` = ${qtyToDeduct} pcs` : ''})`,
-          user: currentUser?.name || 'Kasir',
-          itemType: item.itemType || med.itemType || 'obat',
-        });
-      }
-    });
-
-    setMedicines(prevMeds => {
-      return prevMeds.map(med => {
-        const item = items.find(it => it.medicineId === med.id);
-        if (!item) return med;
-        const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || (med.unit === 'Lusin' ? 12 : 1));
-        const qtyToDeduct = item.qty * multiplier;
-        return { ...med, stock: Math.max(0, med.stock - qtyToDeduct) };
-      });
-    });
-
-    if (newHistories.length > 0) {
-      setStockHistory(prev => [...newHistories, ...prev]);
-    }
-
-    // 2. Update Customer Metrics
-    if (customerObj) {
-      updateCustomer(customerObj.id, {
-        totalSpent: customerObj.totalSpent + finalTotalAmount,
-        totalTransactions: customerObj.totalTransactions + 1,
-      });
-    }
-
-    // 3. Update Doctor Metrics
-    if (doctorObj) {
-      updateDoctor(doctorObj.id, {
-        totalPrescriptions: doctorObj.totalPrescriptions + 1,
-      });
-    }
-
-    setTransactions(prev => [newTransaction, ...prev]);
-    setLastTransaction(newTransaction);
-
-    return newTransaction;
+    return saved;
   };
 
   // Cancel Transaction (Admin Only)
-  const cancelTransaction = (transactionId: string, reason: string) => {
+  const cancelTransaction = async (transactionId: string, reason: string): Promise<void> => {
     const target = transactions.find(t => t.id === transactionId);
     if (!target || target.status === 'Dibatalkan') return;
 
-    const nowFormatted = getWIBDateTimeString();
-
-    // 1. Revert medicine stocks atomically
-    const revertHistories: StockHistory[] = [];
-
-    target.items.forEach(item => {
-      const med = medicines.find(m => m.id === item.medicineId);
-      if (med) {
-        const prevStock = med.stock;
-        const newStock = prevStock + item.qty;
-
-        revertHistories.push({
-          id: `sh-cancel-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${med.id}`,
-          medicineId: med.id,
-          medicineCode: med.code,
-          medicineName: med.name,
-          type: 'masuk',
-          amount: item.qty,
-          prevStock,
-          newStock,
-          date: nowFormatted,
-          note: `Pembatalan Transaksi ${target.trxNo} (${reason})`,
-          user: currentUser?.name || 'Sistem',
-        });
-      }
+    const updated = await apiCancelTransaction(transactionId, {
+      cancel_reason: reason,
+      cancelled_by: currentUser?.name || 'Admin',
     });
 
-    setMedicines(prevMeds => {
-      return prevMeds.map(med => {
-        const item = target.items.find(it => it.medicineId === med.id);
-        if (!item) return med;
-        return { ...med, stock: med.stock + item.qty };
-      });
-    });
-
-    if (revertHistories.length > 0) {
-      setStockHistory(prev => [...revertHistories, ...prev]);
-    }
-
-    // 2. Revert Customer Metrics
-    if (target.customerId) {
-      const cust = customers.find(c => c.id === target.customerId);
-      if (cust) {
-        updateCustomer(cust.id, {
-          totalSpent: Math.max(0, cust.totalSpent - target.totalAmount),
-          totalTransactions: Math.max(0, cust.totalTransactions - 1),
-        });
-      }
-    }
-
-    // 3. Revert Doctor Metrics
-    if (target.doctorId) {
-      const doc = doctors.find(d => d.id === target.doctorId);
-      if (doc) {
-        updateDoctor(doc.id, {
-          totalPrescriptions: Math.max(0, doc.totalPrescriptions - 1),
-        });
-      }
-    }
-
-    // Update Transaction status
-    setTransactions(prev =>
-      prev.map(t =>
-        t.id === transactionId
-          ? {
-              ...t,
-              status: 'Dibatalkan',
-              cancelReason: reason,
-              cancelledBy: currentUser?.name || 'Admin',
-              cancelledAt: nowFormatted,
-            }
-          : t
-      )
-    );
+    const freshMeds = await getMedicines();
+    setMedicines(freshMeds);
+    setTransactions(prev => prev.map(t => t.id === transactionId ? updated : t));
   };
 
   // Auth & Session Logic
@@ -1022,7 +848,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     setCurrentUser(foundUser);
-    localStorage.setItem('apotek_active_user', JSON.stringify(foundUser));
+    sessionStorage.setItem('apotek_active_user', JSON.stringify(foundUser));
     return {
       success: true,
       message: `Selamat datang kembali, ${foundUser.name}!`,
@@ -1032,7 +858,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const logout = () => {
     setCurrentUser(null);
-    localStorage.removeItem('apotek_active_user');
+    sessionStorage.removeItem('apotek_active_user');
   };
 
   const updateProfile = ({
@@ -1088,134 +914,92 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     setUsers(prev => prev.map(u => (u.id === currentUser.id ? updatedUser : u)));
     setCurrentUser(updatedUser);
-    localStorage.setItem('apotek_active_user', JSON.stringify(updatedUser));
+    sessionStorage.setItem('apotek_active_user', JSON.stringify(updatedUser));
 
     return { success: true, message: 'Profil dan kredensial Anda berhasil diperbarui.' };
   };
 
   // CashFlow & User Management
-  const addCashFlow = (cashFlow: Omit<CashFlow, 'id' | 'date' | 'recordedBy'>) => {
-    const newCashFlow: CashFlow = {
-      ...cashFlow,
-      id: `cf-${Date.now()}`,
-      date: getWIBDateTimeString(),
-      recordedBy: currentUser?.name || 'Sistem',
-    };
-    setCashFlows(prev => [newCashFlow, ...prev]);
+  const addCashFlow = async (cashFlow: Omit<CashFlow, 'id' | 'date' | 'recordedBy'>): Promise<void> => {
+    const created = await apiAddCashFlow({ ...cashFlow, date: getWIBDateTimeString(), recordedBy: currentUser?.name || 'Sistem' });
+    setCashFlows(prev => [created, ...prev]);
   };
 
-  const deleteCashFlow = (id: string) => {
+  const deleteCashFlow = async (id: string): Promise<void> => {
+    await apiDeleteCashFlow(id);
     setCashFlows(prev => prev.filter(cf => cf.id !== id));
   };
 
-  const addUser = (userData: Omit<User, 'id' | 'createdAt'> & { password?: string }) => {
-    const cleanUsername = userData.username.trim();
-    if (users.some(u => u.username.toLowerCase() === cleanUsername.toLowerCase())) {
-      return { success: false, message: 'Username sudah digunakan oleh akun lain.' };
+  const addUser = async (userData: Omit<User, 'id' | 'createdAt'> & { password?: string }): Promise<{ success: boolean; message: string }> => {
+    try {
+      const created = await apiAddUser({ ...userData, createdAt: getWIBDateString(), isSuperAdmin: false });
+      setUsers(prev => [...prev, created]);
+      return { success: true, message: 'User baru berhasil ditambahkan.' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: msg };
     }
-
-    const userPassword = userData.password || 'Apotek#2026!';
-    const val = validatePasswordStrength(userPassword);
-    if (!val.isValid) {
-      return {
-        success: false,
-        message: `Password tidak memenuhi standar keamanan: ${val.errors.join(' ')}`,
-      };
-    }
-
-    const newUser: User = {
-      ...userData,
-      username: cleanUsername,
-      password: userPassword,
-      isSuperAdmin: false,
-      id: `usr-${Date.now()}`,
-      createdAt: getWIBDateString(),
-    };
-
-    setUsers(prev => [...prev, newUser]);
-    return { success: true, message: 'User baru berhasil ditambahkan.' };
   };
 
-  const updateUser = (id: string, data: Partial<User>) => {
-    const targetUser = users.find(u => u.id === id);
-    if (!targetUser) return { success: false, message: 'User tidak ditemukan.' };
-
-    // Protection rule: If target is Super Admin, only Super Admin can edit themselves
-    if (targetUser.isSuperAdmin && currentUser?.id !== targetUser.id) {
-      return {
-        success: false,
-        message: 'Akun Admin Utama dilindungi. Hanya Admin Utama yang dapat mengubah data akun tersebut.',
-      };
-    }
-
-    if (data.username) {
-      const cleanUsername = data.username.trim();
-      const existing = users.find(
-        u => u.username.toLowerCase() === cleanUsername.toLowerCase() && u.id !== id
-      );
-      if (existing) {
-        return { success: false, message: 'Username sudah digunakan oleh akun lain.' };
+  const updateUser = async (id: string, data: Partial<User>): Promise<{ success: boolean; message: string }> => {
+    try {
+      const updated = await apiUpdateUser(id, data);
+      setUsers(prev => prev.map(u => u.id === id ? updated : u));
+      if (currentUser?.id === id) {
+        setCurrentUser(updated);
+        sessionStorage.setItem('apotek_active_user', JSON.stringify(updated));
       }
+      return { success: true, message: 'Data user berhasil diperbarui.' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: msg };
     }
-
-    if (data.password && data.password.trim().length > 0) {
-      const val = validatePasswordStrength(data.password);
-      if (!val.isValid) {
-        return {
-          success: false,
-          message: `Password baru tidak memenuhi standar keamanan: ${val.errors.join(' ')}`,
-        };
-      }
-    }
-
-    setUsers(prev => prev.map(u => (u.id === id ? { ...u, ...data } : u)));
-    if (currentUser?.id === id) {
-      const updatedCurrent = { ...currentUser, ...data };
-      setCurrentUser(updatedCurrent);
-      localStorage.setItem('apotek_active_user', JSON.stringify(updatedCurrent));
-    }
-    return { success: true, message: 'Data user berhasil diperbarui.' };
   };
 
-  const deleteUser = (id: string) => {
-    const targetUser = users.find(u => u.id === id);
-    if (!targetUser) return { success: false, message: 'User tidak ditemukan.' };
-
-    // Rule 1: Cannot delete logged in account
+  const deleteUser = async (id: string): Promise<{ success: boolean; message: string }> => {
     if (currentUser && id === currentUser.id) {
-      return {
-        success: false,
-        message: 'Anda tidak dapat menghapus akun Anda sendiri yang sedang aktif.',
-      };
+      return { success: false, message: 'Anda tidak dapat menghapus akun Anda sendiri yang sedang aktif.' };
     }
-
-    // Rule 2: Cannot delete Super Admin
-    if (targetUser.isSuperAdmin || targetUser.id === 'usr-superadmin') {
-      return { success: false, message: 'Akun Admin Utama dilindungi dan tidak dapat dihapus.' };
+    try {
+      await apiDeleteUser(id);
+      setUsers(prev => prev.filter(u => u.id !== id));
+      return { success: true, message: 'User berhasil dihapus.' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: msg };
     }
-
-    setUsers(prev => prev.filter(u => u.id !== id));
-    return { success: true, message: 'User berhasil dihapus.' };
   };
 
   // Settings Management
-  const updateSettings = (newSettings: Partial<PharmacySettings>) => {
-    setSettings(prev => ({ ...prev, ...newSettings }));
+  const updateSettings = async (newSettings: Partial<PharmacySettings>): Promise<void> => {
+    const updated = await apiUpdateSettings(newSettings);
+    setSettings(updated);
   };
 
   // Reset to default sample state
-  const resetToDefaultData = () => {
-    setMedicines([]);
-    setCustomers([]);
-    setDoctors([]);
-    setCashFlows([]);
-    setUsers(initialUsers);
+  const resetToDefaultData = async (): Promise<void> => {
+    const { initialMedicines, initialCustomers, initialDoctors, initialTransactions, initialStockHistory } = await import('../data/initialData');
+    await resetData({
+      settings: initialSettings,
+      users: initialUsers,
+      medicines: initialMedicines,
+      customers: initialCustomers,
+      doctors: initialDoctors,
+      transactions: initialTransactions,
+      stockHistory: initialStockHistory,
+      cashFlows: [],
+    });
+    const fresh = await initializeApp();
+    setMedicines(fresh.medicines);
+    setCustomers(fresh.customers);
+    setDoctors(fresh.doctors);
+    setUsers(fresh.users);
+    setTransactions(fresh.transactions);
+    setStockHistory(fresh.stockHistory);
+    setCashFlows(fresh.cashFlows);
+    setSettings(fresh.settings);
     setCurrentUser(null);
-    setTransactions([]);
-    setStockHistory([]);
-    setSettings(initialSettings);
-    localStorage.clear();
-    localStorage.setItem('apotek_clean_init_v7', 'true');
+    sessionStorage.removeItem('apotek_active_user');
   };
 
   return (
@@ -1280,9 +1064,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setLastTransaction,
         isReceiptModalOpen,
         setIsReceiptModalOpen,
+
+        isLoading,
+        apiError,
       }}
     >
-      {children}
+      {isLoading ? (
+        <div className="flex items-center justify-center h-screen text-xl">Loading...</div>
+      ) : apiError ? (
+        <div className="flex flex-col items-center justify-center h-screen gap-4 p-8 text-center">
+          <h1 className="text-2xl font-bold text-red-600">Koneksi Server Gagal</h1>
+          <p className="text-gray-700">{apiError}</p>
+          <p className="text-gray-500 text-sm">Jalankan server dengan perintah: <code className="bg-gray-100 px-2 py-1 rounded">npm run dev:server</code></p>
+        </div>
+      ) : (
+        children
+      )}
     </AppContext.Provider>
   );
 };

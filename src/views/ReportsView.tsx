@@ -873,7 +873,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       onChange={e => setCashierFilter(e.target.value)}
                       className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-medium text-slate-800 focus:outline-none"
                     >
-                      <option value="all">Semua Kasir</option>
+                      <option key="all" value="all">Semua Kasir</option>
                       {cashierOptions.map(c => (
                         <option key={c} value={c}>
                           {c}
@@ -892,7 +892,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       onChange={e => setDoctorFilter(e.target.value)}
                       className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-medium text-slate-800 focus:outline-none"
                     >
-                      <option value="all">Semua Dokter</option>
+                      <option key="all" value="all">Semua Dokter</option>
                       {doctorOptions.map(d => (
                         <option key={d} value={d}>
                           {d}
@@ -927,7 +927,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       onChange={e => setCategoryFilter(e.target.value)}
                       className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-medium text-slate-800 focus:outline-none text-xs"
                     >
-                      <option value="all">Semua Kategori Obat</option>
+                      <option key="all" value="all">Semua Kategori Obat</option>
                       {categoryOptions.map(cat => (
                         <option key={cat} value={cat}>
                           {cat}
@@ -2531,7 +2531,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   onChange={e => setCategoryFilter(e.target.value)}
                   className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 text-xs outline-none focus:border-emerald-500"
                 >
-                  <option value="all">Semua Kategori Obat</option>
+                  <option key="all" value="all">Semua Kategori Obat</option>
                   {obatCategories.map(c => (
                     <option key={c} value={c}>{c}</option>
                   ))}
@@ -2932,7 +2932,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   onChange={e => setCategoryFilter(e.target.value)}
                   className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 text-xs outline-none focus:border-indigo-500"
                 >
-                  <option value="all">Semua Kategori Non-Obat</option>
+                  <option key="all" value="all">Semua Kategori Non-Obat</option>
                   {nonObatCategories.map(c => (
                     <option key={c} value={c}>{c}</option>
                   ))}

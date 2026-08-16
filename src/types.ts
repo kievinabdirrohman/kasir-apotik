@@ -166,6 +166,9 @@ export interface PharmacySettings {
   defaultPpnRate?: number; // Default 11%
   defaultTaxType?: 'PPN' | 'NON_PPN';
   defaultPpnIncluded?: boolean;
+  // Printer thermal (desktop / Electron)
+  printerName?: string; // Windows device name printer ('' = printer default sistem)
+  paperWidth?: '58mm' | '80mm'; // Lebar kertas thermal
 }
 
 export type CashFlowType = 'Pemasukan' | 'Pengeluaran';
@@ -194,4 +197,5 @@ export type ActiveTab =
   | 'report-non-obat'
   | 'users'
   | 'settings'
-  | 'finances';
+  | 'finances'
+  | 'tutorial';

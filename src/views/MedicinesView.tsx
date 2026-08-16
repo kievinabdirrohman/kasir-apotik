@@ -71,6 +71,15 @@ export const MedicinesView: React.FC = () => {
   // Stock History Modal State
   const [selectedHistoryMed, setSelectedHistoryMed] = useState<Medicine | null>(null);
 
+  // Stock history modal pagination
+  const [historyPage, setHistoryPage] = useState(1);
+  const HISTORY_ITEMS_PER_PAGE = 10;
+
+  const openHistoryModal = (med: Medicine) => {
+    setHistoryPage(1);
+    setSelectedHistoryMed(med);
+  };
+
   // General Form Fields
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
@@ -162,7 +171,7 @@ export const MedicinesView: React.FC = () => {
     setPpnRate(rate);
     setIsPpnIncluded(true);
 
-    const purInc = 10000;
+    const purInc = 0;
     const purNon = calcNonFromInc(purInc, rate);
     setPurchasePriceIncPpn(purInc);
     setPurchasePriceNonPpn(purNon);
@@ -482,7 +491,7 @@ export const MedicinesView: React.FC = () => {
               onChange={e => setCategoryFilter(e.target.value)}
               className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
             >
-              <option value="all">Semua Kategori</option>
+              <option key="all" value="all">Semua Kategori</option>
               {categories.map(cat => (
                 <option key={cat} value={cat}>
                   {cat}
@@ -769,7 +778,7 @@ export const MedicinesView: React.FC = () => {
 
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => setSelectedHistoryMed(med)}
+                        onClick={() => openHistoryModal(med)}
                         className="p-1.5 text-slate-600 hover:text-indigo-600 bg-slate-100 hover:bg-indigo-50 rounded-lg transition-colors flex items-center gap-1 text-[10px] font-semibold"
                         title="Riwayat Perubahan Stok"
                       >
@@ -1073,7 +1082,7 @@ export const MedicinesView: React.FC = () => {
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <button
-                            onClick={() => setSelectedHistoryMed(med)}
+                            onClick={() => openHistoryModal(med)}
                             className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
                             title="Riwayat Perubahan Stok"
                           >
@@ -1587,58 +1596,80 @@ export const MedicinesView: React.FC = () => {
             </div>
 
             <div className="p-6 max-h-[60vh] overflow-y-auto">
-              {stockHistory.filter(sh => sh.medicineId === selectedHistoryMed.id).length === 0 ? (
-                <p className="text-center text-slate-400 py-6 text-xs">
-                  Belum ada log pergerakan stok untuk obat ini.
-                </p>
-              ) : (
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px]">
-                      <th className="py-2">Tanggal</th>
-                      <th className="py-2">Jenis</th>
-                      <th className="py-2">Sebelum</th>
-                      <th className="py-2">Jumlah</th>
-                      <th className="py-2">Sesudah</th>
-                      <th className="py-2">Keterangan</th>
-                      <th className="py-2">Petugas</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {stockHistory
-                      .filter(sh => sh.medicineId === selectedHistoryMed.id)
-                      .map((sh, idx) => (
-                        <tr key={`${sh.id}-${idx}`} className="hover:bg-slate-50">
-                          <td className="py-2 text-slate-500">{sh.date}</td>
-                          <td className="py-2">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                sh.type === 'masuk'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : sh.type === 'keluar'
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : 'bg-blue-100 text-blue-800'
+              {(() => {
+                const medHistoryList = stockHistory.filter(sh => sh.medicineId === selectedHistoryMed.id);
+                const totalHistoryPages = Math.ceil(medHistoryList.length / HISTORY_ITEMS_PER_PAGE);
+                const safeHistoryPage = Math.min(historyPage, Math.max(1, totalHistoryPages));
+                const paginatedHistory = medHistoryList.slice(
+                  (safeHistoryPage - 1) * HISTORY_ITEMS_PER_PAGE,
+                  safeHistoryPage * HISTORY_ITEMS_PER_PAGE
+                );
+
+                if (medHistoryList.length === 0) {
+                  return (
+                    <p className="text-center text-slate-400 py-6 text-xs">
+                      Belum ada log pergerakan stok untuk obat ini.
+                    </p>
+                  );
+                }
+
+                return (
+                  <>
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px]">
+                          <th className="py-2">Tanggal</th>
+                          <th className="py-2">Jenis</th>
+                          <th className="py-2">Sebelum</th>
+                          <th className="py-2">Jumlah</th>
+                          <th className="py-2">Sesudah</th>
+                          <th className="py-2">Keterangan</th>
+                          <th className="py-2">Petugas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {paginatedHistory.map((sh, idx) => (
+                          <tr key={`${sh.id}-${idx}`} className="hover:bg-slate-50">
+                            <td className="py-2 text-slate-500">{sh.date}</td>
+                            <td className="py-2">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  sh.type === 'masuk'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : sh.type === 'keluar'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {sh.type.toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="py-2 font-mono">{sh.prevStock}</td>
+                            <td
+                              className={`py-2 font-mono font-bold ${
+                                sh.amount > 0 ? 'text-emerald-600' : 'text-rose-600'
                               }`}
                             >
-                              {sh.type.toUpperCase()}
-                            </span>
-                          </td>
-                          <td className="py-2 font-mono">{sh.prevStock}</td>
-                          <td
-                            className={`py-2 font-mono font-bold ${
-                              sh.amount > 0 ? 'text-emerald-600' : 'text-rose-600'
-                            }`}
-                          >
-                            {sh.amount > 0 ? `+${sh.amount}` : sh.amount}
-                          </td>
-                          <td className="py-2 font-mono font-bold text-slate-900">{sh.newStock}</td>
-                          <td className="py-2 text-slate-600">{sh.note}</td>
-                          <td className="py-2 text-slate-500">{sh.user}</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              )}
+                              {sh.amount > 0 ? `+${sh.amount}` : sh.amount}
+                            </td>
+                            <td className="py-2 font-mono font-bold text-slate-900">{sh.newStock}</td>
+                            <td className="py-2 text-slate-600">{sh.note}</td>
+                            <td className="py-2 text-slate-500">{sh.user}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <PaginationControls
+                      currentPage={safeHistoryPage}
+                      totalPages={totalHistoryPages}
+                      onPageChange={setHistoryPage}
+                      totalItems={medHistoryList.length}
+                      itemsPerPage={HISTORY_ITEMS_PER_PAGE}
+                    />
+                  </>
+                );
+              })()}
             </div>
 
             <div className="p-4 bg-slate-50 border-t border-slate-100 text-right">

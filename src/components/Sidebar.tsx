@@ -19,6 +19,7 @@ import {
   WalletCards,
   Package,
   Calculator,
+  BookOpen,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -93,6 +94,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       items: [
         { id: 'users', label: 'Pengguna', icon: UserCog, adminOnly: true },
         { id: 'settings', label: 'Pengaturan Apotek', icon: Settings, adminOnly: true },
+      ],
+    },
+    {
+      label: 'Bantuan',
+      items: [
+        { id: 'tutorial', label: 'Panduan Penggunaan', icon: BookOpen },
       ],
     },
   ] as const;

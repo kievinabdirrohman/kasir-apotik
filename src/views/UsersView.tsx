@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { PaginationControls } from '../components/PaginationControls';
 import { User, UserRole } from '../types';
 import { getPasswordStrengthScore, validatePasswordStrength } from '../utils/authUtils';
 import {
@@ -37,6 +38,15 @@ export const UsersView: React.FC = () => {
 
   const [formError, setFormError] = useState('');
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [users.length]);
 
   if (!currentUser || currentUser.role !== 'admin') {
     return (
@@ -57,6 +67,11 @@ export const UsersView: React.FC = () => {
     }
     return true;
   });
+
+  const paginatedUsers = visibleUsers.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
   const openAddModal = () => {
     setEditingUser(null);
@@ -84,7 +99,7 @@ export const UsersView: React.FC = () => {
     setIsFormOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -93,59 +108,59 @@ export const UsersView: React.FC = () => {
       return;
     }
 
-    if (!editingUser) {
-      // Adding new user requires password
-      if (!password) {
-        setFormError('Password wajib diisi untuk pembuatan akun baru.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setFormError('Konfirmasi password tidak cocok dengan password.');
-        return;
-      }
-      const val = validatePasswordStrength(password);
-      if (!val.isValid) {
-        setFormError(`Password tidak memenuhi standar keamanan: ${val.errors.join(' ')}`);
-        return;
-      }
+    if (isSubmitting) return;
+    setIsSubmitting(true);
 
-      const res = addUser({
-        name: name.trim(),
-        username: username.trim(),
-        role,
-        status,
-        phone: phone.trim(),
-        password,
-      });
+    let res: { success: boolean; message: string };
 
-      if (!res.success) {
-        setFormError(res.message);
-        return;
-      }
-
-      setActionNotice({ type: 'success', message: res.message });
-    } else {
-      // Editing existing user
-      if (password || confirmPassword) {
+    try {
+      if (!editingUser) {
+        // Adding new user requires password
+        if (!password) {
+          setFormError('Password wajib diisi untuk pembuatan akun baru.');
+          return;
+        }
         if (password !== confirmPassword) {
-          setFormError('Konfirmasi password baru tidak cocok.');
+          setFormError('Konfirmasi password tidak cocok dengan password.');
           return;
         }
         const val = validatePasswordStrength(password);
         if (!val.isValid) {
-          setFormError(`Password baru tidak memenuhi standar keamanan: ${val.errors.join(' ')}`);
+          setFormError(`Password tidak memenuhi standar keamanan: ${val.errors.join(' ')}`);
           return;
         }
-      }
 
-      const res = updateUser(editingUser.id, {
-        name: name.trim(),
-        username: username.trim(),
-        role,
-        status,
-        phone: phone.trim(),
-        ...(password ? { password } : {}),
-      });
+        res = await addUser({
+          name: name.trim(),
+          username: username.trim(),
+          role,
+          status,
+          phone: phone.trim(),
+          password,
+        });
+      } else {
+        // Editing existing user
+        if (password || confirmPassword) {
+          if (password !== confirmPassword) {
+            setFormError('Konfirmasi password baru tidak cocok.');
+            return;
+          }
+          const val = validatePasswordStrength(password);
+          if (!val.isValid) {
+            setFormError(`Password baru tidak memenuhi standar keamanan: ${val.errors.join(' ')}`);
+            return;
+          }
+        }
+
+        res = await updateUser(editingUser.id, {
+          name: name.trim(),
+          username: username.trim(),
+          role,
+          status,
+          phone: phone.trim(),
+          ...(password ? { password } : {}),
+        });
+      }
 
       if (!res.success) {
         setFormError(res.message);
@@ -153,14 +168,15 @@ export const UsersView: React.FC = () => {
       }
 
       setActionNotice({ type: 'success', message: res.message });
+      setIsFormOpen(false);
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setIsFormOpen(false);
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!deletingUser) return;
-    const res = deleteUser(deletingUser.id);
+    const res = await deleteUser(deletingUser.id);
     setDeletingUser(null);
     if (res.success) {
       setActionNotice({ type: 'success', message: res.message });
@@ -221,7 +237,7 @@ export const UsersView: React.FC = () => {
       <div className="bg-white rounded-3xl border border-slate-100 shadow-2xs overflow-hidden">
         {/* Mobile & Tablet Card View */}
         <div className="lg:hidden p-3 space-y-3 bg-slate-50/50">
-          {visibleUsers.map(u => {
+          {paginatedUsers.map(u => {
             const isSelf = currentUser.id === u.id;
             return (
               <div
@@ -308,7 +324,7 @@ export const UsersView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {visibleUsers.map(u => {
+              {paginatedUsers.map(u => {
                 const isSelf = currentUser.id === u.id;
                 return (
                   <tr
@@ -381,6 +397,15 @@ export const UsersView: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls */}
+        <PaginationControls
+          currentPage={currentPage}
+          totalPages={Math.ceil(visibleUsers.length / ITEMS_PER_PAGE)}
+          onPageChange={setCurrentPage}
+          totalItems={visibleUsers.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+        />
       </div>
 
       {/* User Creation & Editing Modal */}
@@ -542,9 +567,10 @@ export const UsersView: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold shadow-xs"
+                    disabled={isSubmitting}
+                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold shadow-xs disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    {editingUser ? 'Simpan Perubahan' : 'Buat User Baru'}
+                    {isSubmitting ? 'Menyimpan...' : editingUser ? 'Simpan Perubahan' : 'Buat User Baru'}
                   </button>
                 </div>
               </form>

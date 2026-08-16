@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   DollarSign,
 } from 'lucide-react';
+import { PaginationControls } from '../components/PaginationControls';
 
 export const TransactionsView: React.FC = () => {
   const {
@@ -37,6 +38,10 @@ export const TransactionsView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedTrxDetail, setSelectedTrxDetail] = useState<Transaction | null>(null);
+
+  // Detail modal pagination (transaction items)
+  const [detailItemsPage, setDetailItemsPage] = useState(1);
+  const DETAIL_ITEMS_PER_PAGE = 10;
 
   // Date Range Filter State (Default: Hari Ini / 1_day)
   const [datePreset, setDatePreset] = useState<string>('1_day');
@@ -111,7 +116,7 @@ export const TransactionsView: React.FC = () => {
     setIsReceiptModalOpen(true);
   };
 
-  const handleCancelSubmit = (e: React.FormEvent) => {
+  const handleCancelSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cancellingTrx) return;
     if (!cancelReason.trim()) {
@@ -119,7 +124,7 @@ export const TransactionsView: React.FC = () => {
       return;
     }
 
-    cancelTransaction(cancellingTrx.id, cancelReason);
+    await cancelTransaction(cancellingTrx.id, cancelReason);
     setCancellingTrx(null);
     setCancelReason('');
   };
@@ -213,6 +218,19 @@ export const TransactionsView: React.FC = () => {
   const paginatedTransactions = filteredTransactions.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
+  );
+
+  const openTrxDetail = (trx: Transaction) => {
+    setDetailItemsPage(1);
+    setSelectedTrxDetail(trx);
+  };
+
+  const detailItems = selectedTrxDetail?.items ?? [];
+  const totalDetailPages = Math.ceil(detailItems.length / DETAIL_ITEMS_PER_PAGE);
+  const safeDetailPage = Math.min(detailItemsPage, Math.max(1, totalDetailPages));
+  const paginatedDetailItems = detailItems.slice(
+    (safeDetailPage - 1) * DETAIL_ITEMS_PER_PAGE,
+    safeDetailPage * DETAIL_ITEMS_PER_PAGE
   );
 
   return (
@@ -484,7 +502,7 @@ export const TransactionsView: React.FC = () => {
                   onChange={e => setCashierFilter(e.target.value)}
                   className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-medium text-slate-800 focus:outline-none"
                 >
-                  <option value="all">Semua Petugas Kasir</option>
+                  <option key="all" value="all">Semua Petugas Kasir</option>
                   {cashierOptions.map(c => (
                     <option key={c} value={c}>
                       {c}
@@ -560,7 +578,7 @@ export const TransactionsView: React.FC = () => {
                       Struk
                     </button>
                     <button
-                      onClick={() => setSelectedTrxDetail(trx)}
+                      onClick={() => openTrxDetail(trx)}
                       className="px-2.5 py-1 text-slate-600 hover:text-indigo-600 bg-slate-100 hover:bg-indigo-50 rounded-lg transition-colors flex items-center gap-1 text-[11px] font-semibold"
                     >
                       <Eye className="w-3.5 h-3.5" />
@@ -690,7 +708,7 @@ export const TransactionsView: React.FC = () => {
 
                         {/* Detail Modal */}
                         <button
-                          onClick={() => setSelectedTrxDetail(trx)}
+                          onClick={() => openTrxDetail(trx)}
                           className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
                           title="Lihat Detail Transaksi"
                         >
@@ -958,7 +976,7 @@ export const TransactionsView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {selectedTrxDetail.items.map((it, idx) => {
+                        {paginatedDetailItems.map((it, idx) => {
                           const medInfo = medicines.find(m => m.id === it.medicineId || m.name === it.medicineName);
                           const itemIsPpn = getItemIsPpn(it, selectedTrxDetail, medInfo);
                           const itemDpp = Math.round(it.subtotal / (1 + (it.ppnRate || 11) / 100));
@@ -1008,6 +1026,14 @@ export const TransactionsView: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
+
+                  <PaginationControls
+                    currentPage={safeDetailPage}
+                    totalPages={totalDetailPages}
+                    onPageChange={setDetailItemsPage}
+                    totalItems={detailItems.length}
+                    itemsPerPage={DETAIL_ITEMS_PER_PAGE}
+                  />
                 </div>
 
                 {/* 4. Total Summary & Margin (Admin Audit) */}
@@ -1020,15 +1046,22 @@ export const TransactionsView: React.FC = () => {
                     <span>TOTAL DIBAYAR:</span>
                     <span className="text-base text-emerald-800">{formatRupiah(selectedTrxDetail.totalAmount)}</span>
                   </div>
-                  {selectedTrxDetail.costAmount && selectedTrxDetail.costAmount > 0 && currentUser.role === 'admin' && (
-                    <div className="flex justify-between items-center text-[11px] text-emerald-800 pt-1 border-t border-emerald-200/80">
-                      <span>Modal / HPP Obat: {formatRupiah(selectedTrxDetail.costAmount)}</span>
-                      <span className="font-bold">
-                        Estimasi Laba Kotor:{' '}
-                        {formatRupiah(selectedTrxDetail.totalAmount - selectedTrxDetail.costAmount)}
-                      </span>
-                    </div>
-                  )}
+                  {(selectedTrxDetail.costAmount ?? 0) > 0 && currentUser.role === 'admin' && (() => {
+                    // Round to whole rupiah first so tiny fractional cost/laba values never
+                    // collapse to a misleading "Rp 0" under TOTAL DIBAYAR (maximumFractionDigits: 0).
+                    const costAmount = Math.round(Number(selectedTrxDetail.costAmount) || 0);
+                    const profit = Math.round(Number(selectedTrxDetail.totalAmount ?? 0) - costAmount);
+                    const displayValue = (v: number) => (v === 0 ? '—' : formatRupiah(v));
+                    return (
+                      <div className="flex justify-between items-center text-[11px] text-emerald-800 pt-1 border-t border-emerald-200/80">
+                        <span>Modal / HPP Obat: {displayValue(costAmount)}</span>
+                        <span className="font-bold">
+                          Estimasi Laba Kotor:{' '}
+                          {displayValue(profit)}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* 5. Detail Pembatalan jika Dibatalkan */}

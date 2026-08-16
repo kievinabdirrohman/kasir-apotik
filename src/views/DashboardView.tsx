@@ -879,6 +879,8 @@ export const DashboardView: React.FC = () => {
             })
             .sort((a, b) => getDaysUntilExpired(a.expiredDate) - getDaysUntilExpired(b.expiredDate));
 
+          const displayList = list.slice(0, 10);
+
           if (list.length === 0) {
             return (
               <div className="p-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-500 space-y-1">
@@ -904,7 +906,7 @@ export const DashboardView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {list.map(med => {
+                  {displayList.map(med => {
                     const status = getExpiredStatus(med.expiredDate);
 
                     return (
@@ -947,6 +949,20 @@ export const DashboardView: React.FC = () => {
                   })}
                 </tbody>
               </table>
+
+              {list.length > displayList.length && (
+                <div className="px-3 py-2.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    Menampilkan {displayList.length} dari {list.length} obat berisiko
+                  </span>
+                  <button
+                    onClick={() => setActiveTab('medicines')}
+                    className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                  >
+                    Lihat Semua ({list.length}) →
+                  </button>
+                </div>
+              )}
             </div>
           );
         })()}
