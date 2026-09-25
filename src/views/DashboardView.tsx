@@ -46,6 +46,7 @@ import {
   Activity,
   DollarSign,
 } from 'lucide-react';
+import { transactionItemBaseQuantity } from '../utils/unitConversion';
 
 function getPastDateString(daysAgo: number): string {
   const d = new Date();
@@ -121,9 +122,12 @@ const CustomSalesTooltip = ({ active, payload, label, timeframe }: any) => {
         <div className="text-amber-400 font-bold text-xs flex items-center justify-between gap-4">
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-amber-500 inline-block"></span>
-            Sediaan Obat Terjual:
+            Total unit terkecil terjual:
           </span>
-          <span className="text-sm font-black text-white">{data.itemsCount} Pcs</span>
+          <span className="text-right">
+            <span className="text-sm font-black text-white block">{data.itemsCount} unit</span>
+            <span className="text-[9px] text-amber-200/80 block">Konversi ke unit dengan multiplier 1</span>
+          </span>
         </div>
         <div className="text-emerald-400 text-[11px] font-medium flex items-center justify-between gap-4 pt-1.5 border-t border-slate-800">
           <span>Nilai Penjualan:</span>
@@ -253,7 +257,7 @@ export const DashboardView: React.FC = () => {
           return d.getHours() === h;
         }
       });
-      const itemsCount = hourTrx.reduce((sum, t) => sum + (t.items ? t.items.reduce((iSum, item) => iSum + item.qty, 0) : 0), 0);
+      const itemsCount = hourTrx.reduce((sum, t) => sum + (t.items ? t.items.reduce((iSum, item) => iSum + transactionItemBaseQuantity(item), 0) : 0), 0);
       const revenue = hourTrx.reduce((sum, t) => sum + t.totalAmount, 0);
       return {
         label: hourLabel,
@@ -267,7 +271,7 @@ export const DashboardView: React.FC = () => {
     salesChartData = daysList.map(daysAgo => {
       const dateStr = getPastDateString(daysAgo);
       const dayTrx = transactions.filter(t => t.status === 'Selesai' && t.date.startsWith(dateStr));
-      const itemsCount = dayTrx.reduce((sum, t) => sum + (t.items ? t.items.reduce((iSum, item) => iSum + item.qty, 0) : 0), 0);
+      const itemsCount = dayTrx.reduce((sum, t) => sum + (t.items ? t.items.reduce((iSum, item) => iSum + transactionItemBaseQuantity(item), 0) : 0), 0);
       const revenue = dayTrx.reduce((sum, t) => sum + t.totalAmount, 0);
       return {
         label: formatShortDateLabel(dateStr),
@@ -281,7 +285,7 @@ export const DashboardView: React.FC = () => {
     salesChartData = daysList.map(daysAgo => {
       const dateStr = getPastDateString(daysAgo);
       const dayTrx = transactions.filter(t => t.status === 'Selesai' && t.date.startsWith(dateStr));
-      const itemsCount = dayTrx.reduce((sum, t) => sum + (t.items ? t.items.reduce((iSum, item) => iSum + item.qty, 0) : 0), 0);
+      const itemsCount = dayTrx.reduce((sum, t) => sum + (t.items ? t.items.reduce((iSum, item) => iSum + transactionItemBaseQuantity(item), 0) : 0), 0);
       const revenue = dayTrx.reduce((sum, t) => sum + t.totalAmount, 0);
       return {
         label: formatShortDateLabel(dateStr),
@@ -652,15 +656,16 @@ export const DashboardView: React.FC = () => {
             </span>
           </div>
           <div>
-            <span className="text-slate-500 text-[11px] font-medium block">Total Sediaan Terjual</span>
+            <span className="text-slate-500 text-[11px] font-medium block">Total unit terkecil terjual</span>
             <span className="text-sm sm:text-base font-extrabold text-amber-600 block mt-0.5">
-              {totalSalesItemsCount} Pcs / Unit
+              {totalSalesItemsCount} unit
             </span>
+            <span className="text-[10px] text-slate-400 block mt-0.5">Gabungan hasil konversi seluruh unit transaksi ke unit dengan multiplier 1.</span>
           </div>
           <div>
-            <span className="text-slate-500 text-[11px] font-medium block">Rata-rata Sediaan / Trx</span>
+            <span className="text-slate-500 text-[11px] font-medium block">Rata-rata unit terkecil / Trx</span>
             <span className="text-sm sm:text-base font-bold text-slate-800 block mt-0.5">
-              {avgItemsPerTrx} Pcs / Trx
+              {avgItemsPerTrx} unit / Trx
             </span>
           </div>
           <div>
@@ -698,7 +703,7 @@ export const DashboardView: React.FC = () => {
                 formatter={(value) => <span className="text-slate-700 font-medium">{value}</span>}
               />
               <Bar dataKey="transactionsCount" name="Jumlah Transaksi" fill="#6366f1" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="itemsCount" name="Sediaan Terjual (Pcs)" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="itemsCount" name="Total unit terkecil terjual" fill="#f59e0b" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -914,6 +919,9 @@ export const DashboardView: React.FC = () => {
                         <td className="py-2.5 px-3">
                           <div className="font-bold text-slate-900">{med.name}</div>
                           <div className="text-[10px] text-slate-400 font-mono">{med.code}</div>
+                          {med.noBatch && (
+                            <div className="text-[10px] text-slate-400">Batch: {med.noBatch}</div>
+                          )}
                         </td>
                         <td className="py-2.5 px-3">
                           <div className="text-slate-700 font-medium">{med.category}</div>
@@ -927,7 +935,7 @@ export const DashboardView: React.FC = () => {
                                 : 'bg-slate-100 text-slate-800'
                             }`}
                           >
-                            {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
+                            {formatStockDisplay(med.stock, med.unit, med.unitMultiplier, med.units)}
                           </span>
                         </td>
                         <td className="py-2.5 px-3">

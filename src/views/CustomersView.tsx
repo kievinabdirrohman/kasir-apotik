@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Customer } from '../types';
 import { PaginationControls } from '../components/PaginationControls';
+import { SyncCustomerPricesButton } from '../components/SyncCustomerPricesButton';
+import { InlineNotice } from '../components/InlineNotice';
 import { formatRupiah, formatDateTime } from '../utils/formatters';
+import { transactionItemBaseDisplayLabel, transactionItemDisplayLabel, transactionItemSalePrice } from '../utils/unitConversion';
 import {
   Users,
   Search,
@@ -15,7 +18,6 @@ import {
   X,
   UserCheck,
   ShoppingBag,
-  Info,
 } from 'lucide-react';
 
 export const CustomersView: React.FC = () => {
@@ -25,6 +27,7 @@ export const CustomersView: React.FC = () => {
     updateCustomer,
     deleteCustomer,
     transactions,
+    medicines,
     currentUser,
   } = useApp();
 
@@ -50,6 +53,7 @@ export const CustomersView: React.FC = () => {
   const [status, setStatus] = useState<'Aktif' | 'Nonaktif'>('Aktif');
 
   const openAddModal = () => {
+    setAlertMessage(null);
     setEditingCustomer(null);
     setName('');
     setPhone('');
@@ -59,6 +63,7 @@ export const CustomersView: React.FC = () => {
   };
 
   const openEditModal = (cust: Customer) => {
+    setAlertMessage(null);
     setEditingCustomer(cust);
     setName(cust.name);
     setPhone(cust.phone);
@@ -70,9 +75,10 @@ export const CustomersView: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !phone.trim()) {
-      alert('Mohon isi nama dan nomor HP pelanggan.');
+      setAlertMessage('Mohon isi nama dan nomor HP pelanggan.');
       return;
     }
+    setAlertMessage(null);
 
     if (editingCustomer) {
       updateCustomer(editingCustomer.id, {
@@ -130,14 +136,24 @@ export const CustomersView: React.FC = () => {
             Pengelolaan data pelanggan setia apotek, akumulasi poin pembelian, dan riwayat resep.
           </p>
         </div>
-        <button
-          onClick={openAddModal}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-xs flex items-center gap-2 transition-colors self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          Tambah Customer Baru
-        </button>
+        <div className="flex flex-col sm:flex-row sm:items-start gap-2 self-start sm:self-auto">
+          <SyncCustomerPricesButton />
+          <button
+            onClick={openAddModal}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-xs flex items-center gap-2 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Tambah Customer Baru
+          </button>
+        </div>
       </div>
+
+      {alertMessage && !isFormOpen && (
+        <InlineNotice
+          message={alertMessage}
+          onDismiss={() => setAlertMessage(null)}
+        />
+      )}
 
       {/* Toolbar */}
       <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-xs flex items-center justify-between gap-4">
@@ -378,6 +394,12 @@ export const CustomersView: React.FC = () => {
 
               <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
                 <div className="p-6 space-y-4 text-xs overflow-y-auto flex-1">
+                  {alertMessage && (
+                    <InlineNotice
+                      message={alertMessage}
+                      onDismiss={() => setAlertMessage(null)}
+                    />
+                  )}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Nama Lengkap</label>
                     <input
@@ -494,7 +516,8 @@ export const CustomersView: React.FC = () => {
                           <ul className="list-disc list-inside text-slate-600 pl-1 space-y-0.5">
                             {trx.items.map((it, i) => (
                               <li key={i}>
-                                {it.medicineName} ({it.qty} {it.unit} x {formatRupiah(it.price)})
+                                <span className="font-medium">{it.medicineName} ({transactionItemDisplayLabel(it)} @ {formatRupiah(transactionItemSalePrice(it))})</span>
+                                <span className="block text-[10px] text-slate-400 ml-5">{transactionItemBaseDisplayLabel(it, medicines.find(m => m.id === it.medicineId || m.name === it.medicineName))}</span>
                               </li>
                             ))}
                           </ul>
@@ -557,28 +580,6 @@ export const CustomersView: React.FC = () => {
         </div>
       )}
 
-      {/* Custom Alert Modal */}
-      {alertMessage && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-6">
-            <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 space-y-4 text-center my-auto animate-in fade-in">
-              <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
-                <Info className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm mb-1">Akses Dibatasi</h3>
-                <p className="text-xs text-slate-600">{alertMessage}</p>
-              </div>
-              <button
-                onClick={() => setAlertMessage(null)}
-                className="w-full py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900"
-              >
-                Mengerti
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

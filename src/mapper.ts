@@ -11,6 +11,8 @@ const BOOLEAN_COLUMNS = new Set([
   'is_super_admin',
   'is_ppn',
   'auto_print_receipt',
+  'is_primary',
+  'inherit_parent',
 ]);
 
 function camelToSnake(key: string): string {

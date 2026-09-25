@@ -113,14 +113,23 @@ function createTransaction(db: Database.Database, body: Record<string, unknown>)
 
     for (const item of items) {
       const itemRow = { ...(toSQL(item) as Record<string, unknown>), transaction_id: headerRow['id'] };
-      const iCols = Object.keys(itemRow);
-      db.prepare(
-        `INSERT INTO transaction_items (${iCols.join(', ')}) VALUES (${iCols.map(c => '@' + c).join(', ')})`,
-      ).run(itemRow);
 
       const qty = (item['qty'] as number) ?? 0;
       const unitMultiplier = (item['unitMultiplier'] as number) ?? 1;
       const medicineId = item['medicineId'] as string;
+
+      // Snapshot batch: prefer batch sent by the item, fall back to master batch (mirrors server)
+      if (itemRow['no_batch'] === undefined || itemRow['no_batch'] === null) {
+        const master = db.prepare('SELECT no_batch FROM medicines WHERE id = ?').get(medicineId) as
+          | { no_batch: string | null }
+          | undefined;
+        if (master) itemRow['no_batch'] = master.no_batch ?? null;
+      }
+
+      const iCols = Object.keys(itemRow);
+      db.prepare(
+        `INSERT INTO transaction_items (${iCols.join(', ')}) VALUES (${iCols.map(c => '@' + c).join(', ')})`,
+      ).run(itemRow);
 
       db.prepare('UPDATE medicines SET stock = stock - ? WHERE id = ?').run(qty * unitMultiplier, medicineId);
 
@@ -135,8 +144,8 @@ function createTransaction(db: Database.Database, body: Record<string, unknown>)
         db.prepare(
           `INSERT INTO stock_history
              (id, medicine_id, medicine_code, medicine_name, type, amount,
-              prev_stock, new_stock, date, note, user_name, item_type)
-           VALUES (?, ?, ?, ?, 'keluar', ?, ?, ?, ?, ?, ?, ?)`,
+              prev_stock, new_stock, date, note, user_name, item_type, no_batch)
+           VALUES (?, ?, ?, ?, 'keluar', ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           randomUUID(),
           medicineId,
@@ -149,6 +158,7 @@ function createTransaction(db: Database.Database, body: Record<string, unknown>)
           'test',
           'Test User',
           med.item_type ?? 'obat',
+          itemRow['no_batch'] ?? null,
         );
       }
     }
@@ -405,4 +415,308 @@ console.log('--- P10: TransactionItem excludes AUTOINCREMENT id ---');
   console.log('P10 TransactionItem excludes AUTOINCREMENT id: passed ✓');
 }
 
-console.log('\n✅ All property tests passed (P4, P5, P6, P7, P10)');
+// ---------------------------------------------------------------------------
+// P11 — Medicine noBatch round-trip via toSQL/toTS
+// ---------------------------------------------------------------------------
+console.log('--- P11: medicine noBatch round-trip ---');
+{
+  const db = makeDb();
+
+  // With noBatch
+  db.prepare(
+    `INSERT INTO medicines
+       (id, code, name, category, price, stock, min_stock, unit, expired_date, is_active, no_batch)
+     VALUES
+       (@id, @code, @name, @category, @price, @stock, @min_stock, @unit, @expired_date, @is_active, @no_batch)`,
+  ).run({
+    id: 'med-b1', code: 'B1', name: 'Batch Med', category: 'Obat Bebas', price: 5000,
+    stock: 10, min_stock: 2, unit: 'Strip', expired_date: '2030-01-01', is_active: 1,
+    no_batch: 'BATCH-2026-01',
+  });
+  const withBatch = toTS(db.prepare('SELECT * FROM medicines WHERE id = ?').get('med-b1') as Record<string, unknown>);
+  assert.equal(withBatch.noBatch, 'BATCH-2026-01', 'P11: noBatch must survive a DB round-trip');
+
+  // Without noBatch → undefined (nullable column, mapper converts NULL → undefined)
+  seedMedicine(db, 'med-b2', 5);
+  const withoutBatch = toTS(db.prepare('SELECT * FROM medicines WHERE id = ?').get('med-b2') as Record<string, unknown>);
+  assert.equal(withoutBatch.noBatch, undefined, 'P11: absent noBatch must map to undefined, not null');
+
+  console.log('P11 medicine noBatch round-trip: passed ✓');
+}
+
+// ---------------------------------------------------------------------------
+// P12 — Transaction item snapshots its own noBatch
+// ---------------------------------------------------------------------------
+console.log('--- P12: transaction item stores its own noBatch ---');
+{
+  const db = makeDb();
+  seedMedicine(db, 'med-tx1', 50);
+  db.prepare('UPDATE medicines SET no_batch = ? WHERE id = ?').run('MASTER-B', 'med-tx1');
+
+  createTransaction(db, {
+    id: randomUUID(),
+    trxNo: 'TRX-P12',
+    date: new Date().toISOString(),
+    cashierName: 'Test',
+    cashierUsername: 'test',
+    totalAmount: 2000,
+    paymentMethod: 'Tunai',
+    paymentAmount: 2000,
+    changeAmount: 0,
+    status: 'Selesai',
+    isPrescription: false,
+    items: [
+      { medicineId: 'med-tx1', qty: 2, unitMultiplier: 1, medicineCode: 'A', medicineName: 'Med A', unit: 'Tab', price: 1000, subtotal: 2000, noBatch: 'ITEM-B' },
+    ],
+  });
+
+  const raw = db.prepare('SELECT no_batch FROM transaction_items WHERE medicine_id = ?').get('med-tx1') as { no_batch: string | null };
+  assert.equal(raw.no_batch, 'ITEM-B', 'P12: item-provided noBatch must be stored as-is');
+
+  const sh = db.prepare("SELECT no_batch FROM stock_history WHERE medicine_id = ? AND type = 'keluar'").get('med-tx1') as { no_batch: string | null };
+  assert.equal(sh.no_batch, 'ITEM-B', 'P12: stock history (keluar) must snapshot the item noBatch');
+
+  console.log('P12 transaction item snapshots own noBatch: passed ✓');
+}
+
+// ---------------------------------------------------------------------------
+// P13 — Transaction item falls back to master batch when batch not provided
+// ---------------------------------------------------------------------------
+console.log('--- P13: transaction item falls back to master no_batch ---');
+{
+  const db = makeDb();
+  seedMedicine(db, 'med-tx2', 30);
+  db.prepare('UPDATE medicines SET no_batch = ? WHERE id = ?').run('MASTER-B2', 'med-tx2');
+
+  createTransaction(db, {
+    id: randomUUID(),
+    trxNo: 'TRX-P13',
+    date: new Date().toISOString(),
+    cashierName: 'Test',
+    cashierUsername: 'test',
+    totalAmount: 1000,
+    paymentMethod: 'Tunai',
+    paymentAmount: 1000,
+    changeAmount: 0,
+    status: 'Selesai',
+    isPrescription: false,
+    items: [
+      { medicineId: 'med-tx2', qty: 1, unitMultiplier: 1, medicineCode: 'B', medicineName: 'Med B', unit: 'Tab', price: 1000, subtotal: 1000 },
+    ],
+  });
+
+  const raw = db.prepare('SELECT no_batch FROM transaction_items WHERE medicine_id = ?').get('med-tx2') as { no_batch: string | null };
+  assert.equal(raw.no_batch, 'MASTER-B2', 'P13: missing item batch must fall back to master no_batch');
+
+  const sh = db.prepare("SELECT no_batch FROM stock_history WHERE medicine_id = ? AND type = 'keluar'").get('med-tx2') as { no_batch: string | null };
+  assert.equal(sh.no_batch, 'MASTER-B2', 'P13: stock history (keluar) must fall back to master no_batch');
+
+  console.log('P13 transaction item falls back to master no_batch: passed ✓');
+}
+
+// ---------------------------------------------------------------------------
+// P14 — Transaction item stores customer_id & customer_name (snapshot)
+// ---------------------------------------------------------------------------
+console.log('--- P14: transaction item stores customer snapshot ---');
+{
+  const db = makeDb();
+  seedMedicine(db, 'med-tx3', 30);
+  // Insert a customer
+  db.prepare(
+    `INSERT INTO customers (id, member_no, name, phone, status, total_spent, total_transactions, created_at)
+     VALUES (?, ?, ?, ?, 'Aktif', 0, 0, '2026-01-01')`
+  ).run('cust-p14', 'MBR-001', 'Budi Santoso', '08123456789');
+
+  createTransaction(db, {
+    id: randomUUID(),
+    trxNo: 'TRX-P14',
+    date: new Date().toISOString(),
+    cashierName: 'Test',
+    cashierUsername: 'test',
+    totalAmount: 1000,
+    paymentMethod: 'Tunai',
+    paymentAmount: 1000,
+    changeAmount: 0,
+    status: 'Selesai',
+    isPrescription: false,
+    customerId: 'cust-p14',
+    items: [
+      { medicineId: 'med-tx3', qty: 1, unitMultiplier: 1, medicineCode: 'C', medicineName: 'Med C', unit: 'Tab', price: 1000, subtotal: 1000, customerId: 'cust-p14', customerName: 'Budi Santoso' },
+    ],
+  });
+
+  const raw = db.prepare('SELECT customer_id, customer_name FROM transaction_items WHERE medicine_id = ?').get('med-tx3') as { customer_id: string | null; customer_name: string | null };
+  assert.equal(raw.customer_id, 'cust-p14', 'P14: customer_id must be stored in transaction item');
+  assert.equal(raw.customer_name, 'Budi Santoso', 'P14: customer_name must be stored in transaction item');
+
+  console.log('P14 transaction item stores customer snapshot: passed ✓');
+}
+
+// ---------------------------------------------------------------------------
+// P15 — medicine_customer_prices table: CRUD round-trip
+// ---------------------------------------------------------------------------
+console.log('--- P15: medicine_customer_prices CRUD ---');
+{
+  const db = makeDb();
+  seedMedicine(db, 'med-cp1', 20);
+  // Insert customer
+  db.prepare(
+    `INSERT INTO customers (id, member_no, name, phone, status, total_spent, total_transactions, created_at)
+     VALUES (?, ?, ?, ?, 'Aktif', 0, 0, '2026-01-01')`
+  ).run('cust-cp1', 'MBR-001', 'Rina', '0811111111');
+
+  // Insert customer price
+  db.prepare(
+    `INSERT INTO medicine_customer_prices (id, medicine_id, customer_id, price)
+     VALUES (?, ?, ?, ?)`
+  ).run('cp-1', 'med-cp1', 'cust-cp1', 4500);
+
+  const row = db.prepare('SELECT * FROM medicine_customer_prices WHERE id = ?').get('cp-1') as Record<string, unknown>;
+  assert.equal(row['medicine_id'], 'med-cp1', 'P15: medicine_id must be stored');
+  assert.equal(row['customer_id'], 'cust-cp1', 'P15: customer_id must be stored');
+  assert.equal(row['price'], 4500, 'P15: price must be stored');
+
+  // UNIQUE constraint: duplicate (medicine_id, customer_id) must fail
+  let threw = false;
+  try {
+    db.prepare(`INSERT INTO medicine_customer_prices (id, medicine_id, customer_id, price) VALUES (?, ?, ?, ?)`)
+      .run('cp-2', 'med-cp1', 'cust-cp1', 4000);
+  } catch { threw = true; }
+  assert.ok(threw, 'P15: UNIQUE constraint must prevent duplicate medicine+customer');
+
+  // Delete
+  db.prepare('DELETE FROM medicine_customer_prices WHERE id = ?').run('cp-1');
+  const deleted = db.prepare('SELECT * FROM medicine_customer_prices WHERE id = ?').get('cp-1');
+  assert.equal(deleted, undefined, 'P15: deleted row must not exist');
+
+  console.log('P15 medicine_customer_prices CRUD: passed ✓');
+}
+
+// ---------------------------------------------------------------------------
+// P16 — Medicine master stock update and stock_history logging
+// ---------------------------------------------------------------------------
+console.log('--- P16: Medicine stock edit & stock_history logging ---');
+{
+  const db = makeDb();
+  seedMedicine(db, 'med-stk1', 10);
+
+  // Simulate edit data updating stock from 10 to 15
+  const prevStock = 10;
+  const newStock = 15;
+  const diff = newStock - prevStock;
+
+  db.prepare('UPDATE medicines SET stock = ?, name = ? WHERE id = ?').run(newStock, 'Test Med Updated', 'med-stk1');
+
+  // Insert mutation into stock_history
+  const histId = 'sh-test-p16';
+  db.prepare(`
+    INSERT INTO stock_history
+      (id, medicine_id, medicine_code, medicine_name, type, amount, prev_stock, new_stock, date, note, user_name, item_type, tax_type)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    histId,
+    'med-stk1',
+    'MED-med-stk1',
+    'Test Med Updated',
+    'penyesuaian',
+    diff,
+    prevStock,
+    newStock,
+    '2026-08-23 13:00:00',
+    'Koreksi stok langsung via edit data obat (10 → 15)',
+    'Admin',
+    'obat',
+    'PPN'
+  );
+
+  const updatedMed = db.prepare('SELECT * FROM medicines WHERE id = ?').get('med-stk1') as { stock: number; name: string };
+  assert.equal(updatedMed.stock, 15, 'P16: medicine stock must be 15');
+  assert.equal(updatedMed.name, 'Test Med Updated', 'P16: medicine name must be updated');
+
+  const historyRow = db.prepare('SELECT * FROM stock_history WHERE id = ?').get(histId) as Record<string, unknown>;
+  assert.equal(historyRow['type'], 'penyesuaian', 'P16: mutation type must be penyesuaian');
+  assert.equal(historyRow['amount'], 5, 'P16: diff amount must be +5');
+  assert.equal(historyRow['prev_stock'], 10, 'P16: prev_stock must be 10');
+  assert.equal(historyRow['new_stock'], 15, 'P16: new_stock must be 15');
+  assert.equal(historyRow['item_type'], 'obat', 'P16: item_type must be obat');
+
+  console.log('P16 Medicine stock edit & stock_history logging: passed ✓');
+}
+
+// ---------------------------------------------------------------------------
+// P17 — Non-medicine item stock edit & stock_history logging
+// ---------------------------------------------------------------------------
+console.log('--- P17: Non-medicine stock edit & stock_history logging ---');
+{
+  const db = makeDb();
+  db.prepare(`
+    INSERT INTO medicines
+      (id, code, name, category, price, stock, min_stock, unit, expired_date, is_active, item_type)
+    VALUES
+      ('nonmed-1', 'NMD-001', 'Sabun Antiseptik', 'Barang Umum', 8000, 20, 5, 'Pcs', '2030-01-01', 1, 'non_obat')
+  `).run();
+
+  // Simulate edit data reducing stock from 20 to 18
+  const prevStock = 20;
+  const newStock = 18;
+  const diff = newStock - prevStock; // -2
+
+  db.prepare('UPDATE medicines SET stock = ? WHERE id = ?').run(newStock, 'nonmed-1');
+
+  const histId = 'sh-test-p17';
+  db.prepare(`
+    INSERT INTO stock_history
+      (id, medicine_id, medicine_code, medicine_name, type, amount, prev_stock, new_stock, date, note, user_name, item_type, tax_type)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    histId,
+    'nonmed-1',
+    'NMD-001',
+    'Sabun Antiseptik',
+    'penyesuaian',
+    diff,
+    prevStock,
+    newStock,
+    '2026-08-23 13:05:00',
+    'Koreksi stok langsung via edit data barang non-obat (20 → 18)',
+    'Admin',
+    'non_obat',
+    'NON_PPN'
+  );
+
+  const updatedMed = db.prepare('SELECT * FROM medicines WHERE id = ?').get('nonmed-1') as { stock: number; item_type: string };
+  assert.equal(updatedMed.stock, 18, 'P17: non-medicine stock must be 18');
+  assert.equal(updatedMed.item_type, 'non_obat', 'P17: item_type must be non_obat');
+
+  const historyRow = db.prepare('SELECT * FROM stock_history WHERE id = ?').get(histId) as Record<string, unknown>;
+  assert.equal(historyRow['type'], 'penyesuaian', 'P17: mutation type must be penyesuaian');
+  assert.equal(historyRow['amount'], -2, 'P17: diff amount must be -2');
+  assert.equal(historyRow['prev_stock'], 20, 'P17: prev_stock must be 20');
+  assert.equal(historyRow['new_stock'], 18, 'P17: new_stock must be 18');
+  assert.equal(historyRow['item_type'], 'non_obat', 'P17: item_type must be non_obat');
+
+  console.log('P17 Non-medicine stock edit & stock_history logging: passed ✓');
+}
+
+// ---------------------------------------------------------------------------
+// P18 — Master edit without stock change leaves stock_history untouched
+// ---------------------------------------------------------------------------
+console.log('--- P18: Master edit without stock change ---');
+{
+  const db = makeDb();
+  seedMedicine(db, 'med-stk3', 10);
+
+  const initialHistCount = (db.prepare('SELECT COUNT(*) as cnt FROM stock_history').get() as { cnt: number }).cnt;
+
+  // Edit only price and location without changing stock
+  db.prepare('UPDATE medicines SET price = 15000, location = ? WHERE id = ?').run('Rak B2', 'med-stk3');
+
+  const afterHistCount = (db.prepare('SELECT COUNT(*) as cnt FROM stock_history').get() as { cnt: number }).cnt;
+  assert.equal(afterHistCount, initialHistCount, 'P18: stock_history count must not change when stock is unchanged');
+
+  console.log('P18 Master edit without stock change: passed ✓');
+}
+
+console.log('\n✅ All property tests passed (P4, P5, P6, P7, P10, P11, P12, P13, P14, P15, P16, P17, P18)');

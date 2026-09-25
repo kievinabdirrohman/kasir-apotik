@@ -1,7 +1,7 @@
 {
   "name": "apotek-azzainiyah",
   "private": true,
-  "version": "1.0.2",
+  "version": "3.0.0",
   "description": "Sistem Kasir Apotek — Operasional & Kasir (Web + Desktop Electron)",
   "author": "Apotek Az Zainiyah",
   "type": "module",
@@ -12,11 +12,16 @@
     "preview": "vite preview",
     "clean": "rm -rf dist electron-dist release",
     "lint": "tsc --noEmit",
+    "test:storage": "node --import tsx scripts/storage.test.ts",
+    "test:multi-unit": "node --import tsx scripts/multi-unit.test.ts",
+    "test:unit-sync": "node --import tsx scripts/unit-sync.test.ts",
+    "test:pos-autocomplete": "node --import tsx scripts/pos-autocomplete.test.ts",
+    "test:report-pdf": "node --import tsx scripts/report-pdf.test.ts",
     "dev:server": "tsx server.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
     "icon:generate": "node scripts/make-icon.mjs",
-    "electron:compile": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --packages=external --outdir=electron-dist --out-extension:.js=.cjs",
-    "electron:compile:watch": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --packages=external --outdir=electron-dist --out-extension:.js=.cjs --watch",
+    "electron:compile": "esbuild ./electron/main.ts ./electron/preload.ts --bundle --platform=node --format=cjs --packages=external --outdir=electron-dist --out-extension:.js=.cjs",
+    "electron:compile:watch": "esbuild ./electron/main.ts ./electron/preload.ts --bundle --platform=node --format=cjs --packages=external --outdir=electron-dist --out-extension:.js=.cjs --watch",
     "electron:run": "wait-on tcp:3000 && electron .",
     "electron:dev": "concurrently -k \"npm run dev\" \"npm run electron:compile:watch\" \"npm run electron:run\"",
     "electron:dist": "npm run build && npm run electron:compile && electron-builder --win"
@@ -30,6 +35,7 @@
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pdfmake": "^0.3.11",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "recharts": "^3.10.1",
@@ -49,6 +55,7 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
+    "@types/pdfmake": "^0.3.3",
     "wait-on": "^8.0.5"
   }
 }

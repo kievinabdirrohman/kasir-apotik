@@ -32,6 +32,15 @@ CREATE TABLE settings (
   -- Printer thermal (desktop / Electron): nama device printer & lebar kertas
   printer_name TEXT DEFAULT '',
   paper_width TEXT DEFAULT '58mm' CHECK (paper_width IN ('58mm', '80mm')),
+  margin_top_mm REAL NOT NULL DEFAULT 0,
+  margin_right_mm REAL NOT NULL DEFAULT 0,
+  margin_bottom_mm REAL NOT NULL DEFAULT 0,
+  margin_left_mm REAL NOT NULL DEFAULT 0,
+  printer_font_size REAL NOT NULL DEFAULT 7,
+  printer_line_height REAL NOT NULL DEFAULT 1.2,
+  printer_label_width_pct REAL NOT NULL DEFAULT 56,
+  printer_column_gap_mm REAL NOT NULL DEFAULT 2,
+  printer_amount_alignment TEXT NOT NULL DEFAULT 'right',
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -67,6 +76,7 @@ CREATE TABLE medicines (
   unit TEXT NOT NULL,
   unit_multiplier INTEGER DEFAULT 1,
   expired_date TEXT NOT NULL,
+  no_batch TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   location TEXT,
   item_type TEXT DEFAULT 'obat' CHECK (item_type IN ('obat', 'non_obat')),
@@ -77,7 +87,8 @@ CREATE TABLE medicines (
   purchase_price_non_ppn REAL DEFAULT 0,
   purchase_price_inc_ppn REAL DEFAULT 0,
   price_non_ppn REAL DEFAULT 0,
-  price_inc_ppn REAL DEFAULT 0
+  price_inc_ppn REAL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ------------------------------------------------------------
@@ -172,6 +183,19 @@ CREATE TABLE transaction_items (
   item_type TEXT DEFAULT 'obat' CHECK (item_type IN ('obat', 'non_obat')),
   unit_multiplier INTEGER DEFAULT 1,
   purchase_price REAL DEFAULT 0,
+  no_batch TEXT,
+  customer_id TEXT,
+  customer_name TEXT,
+  price_source TEXT DEFAULT 'normal' CHECK (price_source IN ('normal', 'customer')),
+  unit_id TEXT,
+  pricing_mode TEXT NOT NULL DEFAULT 'legacy' CHECK (pricing_mode IN ('normal', 'custom', 'legacy')),
+  custom_price_id TEXT,
+  custom_quantity INTEGER DEFAULT 1,
+  custom_unit TEXT,
+  custom_total_price REAL,
+  margin_pct REAL DEFAULT 0,
+  bhp_amount REAL DEFAULT 0,
+  profit_amount REAL DEFAULT 0,
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE RESTRICT
 );
@@ -199,6 +223,12 @@ CREATE TABLE stock_history (
   ppn_amount REAL DEFAULT 0,
   margin_pct REAL DEFAULT 0,
   bhp_amount REAL DEFAULT 0,
+  no_batch TEXT,
+  input_unit_id TEXT,
+  input_unit TEXT,
+  input_qty INTEGER,
+  input_multiplier INTEGER,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE
 );
 
@@ -217,6 +247,89 @@ CREATE TABLE cash_flows (
 );
 
 -- ------------------------------------------------------------
+-- 10. TABLE: medicine_customer_prices (Harga Jual Spesifik per Customer)
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS medicine_customer_prices;
+CREATE TABLE medicine_customer_prices (
+  id TEXT PRIMARY KEY,
+  medicine_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  price REAL NOT NULL DEFAULT 0,
+  margin_pct REAL NOT NULL DEFAULT 0,
+  bhp_amount REAL NOT NULL DEFAULT 0,
+  inherit_parent INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(medicine_id, customer_id),
+  FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+);
+
+-- ------------------------------------------------------------
+-- 11. TABLE: medicine_units (Konfigurasi multi-satuan)
+-- ------------------------------------------------------------
+CREATE TABLE medicine_units (
+  id TEXT PRIMARY KEY,
+  medicine_id TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  multiplier_to_base INTEGER NOT NULL DEFAULT 1 CHECK (multiplier_to_base >= 1),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  price_per_base REAL NOT NULL DEFAULT 0,
+  purchase_price_per_base REAL DEFAULT 0,
+  selling_price REAL NOT NULL DEFAULT 0,
+  margin_pct REAL NOT NULL DEFAULT 0,
+  bhp_amount REAL NOT NULL DEFAULT 0,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(medicine_id, unit),
+  UNIQUE(medicine_id, sort_order),
+  FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE
+);
+
+CREATE TABLE medicine_unit_customer_prices (
+  id TEXT PRIMARY KEY,
+  medicine_id TEXT NOT NULL,
+  medicine_unit_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  price_per_base REAL NOT NULL DEFAULT 0,
+  selling_price REAL NOT NULL DEFAULT 0,
+  margin_pct REAL NOT NULL DEFAULT 0,
+  bhp_amount REAL NOT NULL DEFAULT 0,
+  inherit_parent INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(medicine_unit_id, customer_id),
+  FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
+  FOREIGN KEY (medicine_unit_id) REFERENCES medicine_units(id) ON DELETE CASCADE,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+);
+
+-- ------------------------------------------------------------
+-- 12. TABLE: medicine_custom_prices (Harga Paket Custom)
+-- ------------------------------------------------------------
+CREATE TABLE medicine_custom_prices (
+  id TEXT PRIMARY KEY,
+  medicine_id TEXT NOT NULL,
+  unit_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  total_price REAL NOT NULL CHECK (total_price >= 0),
+  margin_pct REAL NOT NULL DEFAULT 0,
+  bhp_amount REAL NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(medicine_id, unit_id, quantity),
+  FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
+  FOREIGN KEY (unit_id) REFERENCES medicine_units(id) ON DELETE CASCADE
+);
+
+CREATE TABLE medicine_custom_price_customers (
+  id TEXT PRIMARY KEY,
+  custom_price_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  total_price REAL NOT NULL CHECK (total_price >= 0),
+  margin_pct REAL NOT NULL DEFAULT 0,
+  bhp_amount REAL NOT NULL DEFAULT 0,
+  inherit_parent INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(custom_price_id, customer_id),
+  FOREIGN KEY (custom_price_id) REFERENCES medicine_custom_prices(id) ON DELETE CASCADE,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+);
+-- ------------------------------------------------------------
 -- INDEXES FOR MAXIMUM QUERY PERFORMANCE
 -- ------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_medicines_code ON medicines(code);
@@ -228,3 +341,11 @@ CREATE INDEX IF NOT EXISTS idx_transactions_tax_type ON transactions(tax_type);
 CREATE INDEX IF NOT EXISTS idx_transaction_items_trx ON transaction_items(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_stock_history_med ON stock_history(medicine_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flows_date ON cash_flows(date);
+CREATE INDEX IF NOT EXISTS idx_mcp_medicine ON medicine_customer_prices(medicine_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_customer ON medicine_customer_prices(customer_id);
+CREATE INDEX IF NOT EXISTS idx_medicine_units_medicine ON medicine_units(medicine_id);
+CREATE INDEX IF NOT EXISTS idx_medicine_unit_customer_prices_unit ON medicine_unit_customer_prices(medicine_unit_id);
+CREATE INDEX IF NOT EXISTS idx_medicine_unit_customer_prices_customer ON medicine_unit_customer_prices(customer_id);
+CREATE INDEX IF NOT EXISTS idx_medicine_custom_prices_medicine ON medicine_custom_prices(medicine_id);
+CREATE INDEX IF NOT EXISTS idx_medicine_custom_price_customers_price ON medicine_custom_price_customers(custom_price_id);
+CREATE INDEX IF NOT EXISTS idx_medicine_custom_price_customers_customer ON medicine_custom_price_customers(customer_id);

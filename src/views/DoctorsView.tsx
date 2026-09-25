@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Doctor } from '../types';
 import { PaginationControls } from '../components/PaginationControls';
+import { InlineNotice } from '../components/InlineNotice';
 import { formatRupiah, formatDateTime } from '../utils/formatters';
 import {
   Stethoscope,
@@ -16,7 +17,6 @@ import {
   CheckCircle,
   Clock,
   Wallet,
-  Info,
 } from 'lucide-react';
 
 export const DoctorsView: React.FC = () => {
@@ -51,6 +51,7 @@ export const DoctorsView: React.FC = () => {
   const [status, setStatus] = useState<'Aktif' | 'Nonaktif'>('Aktif');
 
   const openAddModal = () => {
+    setAlertMessage(null);
     setEditingDoctor(null);
     setName('');
     setPhone('');
@@ -59,6 +60,7 @@ export const DoctorsView: React.FC = () => {
   };
 
   const openEditModal = (doc: Doctor) => {
+    setAlertMessage(null);
     setEditingDoctor(doc);
     setName(doc.name);
     setPhone(doc.phone);
@@ -69,9 +71,10 @@ export const DoctorsView: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      alert('Mohon isi nama dokter yang valid.');
+      setAlertMessage('Mohon isi nama dokter yang valid.');
       return;
     }
+    setAlertMessage(null);
 
     if (editingDoctor) {
       updateDoctor(editingDoctor.id, {
@@ -136,6 +139,13 @@ export const DoctorsView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {alertMessage && !isFormOpen && (
+        <InlineNotice
+          message={alertMessage}
+          onDismiss={() => setAlertMessage(null)}
+        />
+      )}
 
       {/* Toolbar */}
       <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-xs flex items-center justify-between gap-4">
@@ -350,6 +360,12 @@ export const DoctorsView: React.FC = () => {
 
               <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
                 <div className="p-6 space-y-4 text-xs overflow-y-auto flex-1">
+                  {alertMessage && (
+                    <InlineNotice
+                      message={alertMessage}
+                      onDismiss={() => setAlertMessage(null)}
+                    />
+                  )}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Nama Lengkap Dokter</label>
                     <input
@@ -501,28 +517,6 @@ export const DoctorsView: React.FC = () => {
         </div>
       )}
 
-      {/* Custom Alert Modal */}
-      {alertMessage && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-6">
-            <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 space-y-4 text-center my-auto animate-in fade-in">
-              <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
-                <Info className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm mb-1">Akses Dibatasi</h3>
-                <p className="text-xs text-slate-600">{alertMessage}</p>
-              </div>
-              <button
-                onClick={() => setAlertMessage(null)}
-                className="w-full py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900"
-              >
-                Mengerti
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

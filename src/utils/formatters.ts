@@ -1,5 +1,8 @@
 // Currency and Date formatting utilities for Indonesian locale
 
+import type { MedicineUnit } from '../types';
+import { stockUnitParts } from './unitConversion';
+
 export function formatRupiah(amount: number | string | undefined | null): string {
   if (amount === undefined || amount === null) return 'Rp 0';
   const val = Number(amount);
@@ -50,6 +53,15 @@ export function formatCashierName(name: string): string {
   return name.replace(/\s*\([^)]*\)/g, '').trim();
 }
 
+export function formatTransactionCustomer(transaction: {
+  customerId?: string;
+  customerName?: string;
+  customerMemberNo?: string;
+}): string {
+  const name = transaction.customerName?.trim() || (transaction.customerId ? 'Member' : 'Customer Umum');
+  return transaction.customerMemberNo ? `${name} (${transaction.customerMemberNo})` : name;
+}
+
 export function getWIBDateString(): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Jakarta',
@@ -72,6 +84,17 @@ export function getWIBDateTimeString(): string {
     hour12: false,
   });
   return formatter.format(new Date());
+}
+
+export function sortByUpdatedAt<T extends { updatedAt?: string; date?: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const parse = (value?: string) => {
+      if (!value) return 0;
+      const timestamp = Date.parse(value.includes(' ') && !value.includes('T') ? value.replace(' ', 'T') : value);
+      return Number.isNaN(timestamp) ? 0 : timestamp;
+    };
+    return parse(b.updatedAt || b.date) - parse(a.updatedAt || a.date);
+  });
 }
 
 export function getDaysUntilExpired(expiredDateStr: string): number {
@@ -179,20 +202,27 @@ export function getItemIsPpn(
 export function formatStockDisplay(
   stock: number,
   unit?: string,
-  unitMultiplier?: number
+  unitMultiplier?: number,
+  units?: MedicineUnit[],
 ): string {
+  if (units?.length) {
+    const baseUnit = units.find(item => Number(item.multiplierToBase) === 1)?.unit || 'Pcs';
+    const parts = stockUnitParts(stock, units);
+    if (parts.length) return `${parts.map(part => `${part.qty} ${part.unit}`).join(' + ')} (Total stok dasar: ${stock} ${baseUnit})`;
+  }
   const rawUnit = unit || 'pcs';
+  const baseUnit = 'Pcs';
   const mult = rawUnit === 'Lusin' ? 12 : (unitMultiplier || 1);
   if (mult > 1) {
     const mainQty = Math.floor(stock / mult);
     const sisaPcs = stock % mult;
     if (sisaPcs > 0 && mainQty > 0) {
-      return `${mainQty} ${rawUnit} ${sisaPcs} pcs (${stock} pcs total)`;
+      return `${mainQty} ${rawUnit} + ${sisaPcs} ${baseUnit} (Total stok dasar: ${stock} ${baseUnit})`;
     } else if (sisaPcs > 0 && mainQty === 0) {
-      return `${stock} pcs`;
+      return `${stock} ${baseUnit} (Total stok dasar: ${stock} ${baseUnit})`;
     } else {
-      return `${mainQty} ${rawUnit} (${stock} pcs)`;
+      return `${mainQty} ${rawUnit} (Total stok dasar: ${stock} ${baseUnit})`;
     }
   }
-  return `${stock} ${rawUnit}`;
+  return `${stock} ${rawUnit} (Total stok dasar: ${stock} ${baseUnit})`;
 }

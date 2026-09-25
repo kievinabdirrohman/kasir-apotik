@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { Medicine, MedicineCategory } from '../types';
+import { Medicine, MedicineCategory, MedicineCustomPriceCustomer } from '../types';
 import { PaginationControls } from '../components/PaginationControls';
+import { MedicineUnitEditor, type EditableMedicineUnit, type EditableCustomPrice } from '../components/MedicineUnitEditor';
+import { MedicinePriceSummary } from '../components/MedicinePriceSummary';
+import { SyncCustomerPricesButton } from '../components/SyncCustomerPricesButton';
+import { InlineNotice } from '../components/InlineNotice';
 import { formatRupiah, getExpiredStatus, getDaysUntilExpired, formatDate, formatStockDisplay } from '../utils/formatters';
+import { AVAILABLE_UNITS, getMedicineUnits, markupPctFromPrice, normalizeMedicineUnits, purchasePricePerBaseFromPackage, synchronizePrimaryUnit, synchronizeUnitPurchasePrices } from '../utils/unitConversion';
 import {
   Pill,
   Search,
@@ -37,6 +42,8 @@ export const MedicinesView: React.FC = () => {
     stockHistory,
     currentUser,
     setActiveTab,
+    customers,
+    addCustomer,
   } = useApp();
 
   // Search & Filter state
@@ -86,15 +93,19 @@ export const MedicinesView: React.FC = () => {
   const [itemType, setItemType] = useState<'obat' | 'non_obat'>('obat');
   const [category, setCategory] = useState<MedicineCategory>('Obat Bebas');
   const [stock, setStock] = useState<number>(0);
+  const [stockAdjustmentNote, setStockAdjustmentNote] = useState('');
   const [minStock, setMinStock] = useState<number>(10);
   const [unit, setUnit] = useState('Strip');
+  const [unitRows, setUnitRows] = useState<EditableMedicineUnit[]>([]);
+  const [customPrices, setCustomPrices] = useState<EditableCustomPrice[]>([]);
+  const [normalCustomerPrices, setNormalCustomerPrices] = useState<MedicineCustomPriceCustomer[]>([]);
   const [expiredDate, setExpiredDate] = useState('');
   const [location, setLocation] = useState('');
   const [isActive, setIsActive] = useState(true);
 
   // Margin & BHP Auto Pricing
   const [bhpAmount, setBhpAmount] = useState<number>(0);
-  const [marginPct, setMarginPct] = useState<number>(20);
+  const [marginPct, setMarginPct] = useState<number>(0);
 
   // PPN & Pricing States
   const [ppnRate, setPpnRate] = useState<number>(11);
@@ -121,17 +132,23 @@ export const MedicinesView: React.FC = () => {
     'Lainnya',
   ];
 
-  const units = ['Strip', 'Botol', 'Tube', 'Box', 'Tablet', 'Blister', 'Pcs', 'Ampul', 'Sachet', 'Dus', 'Pack', 'Lusin'];
-
   // Helper Math Converters for PPN
   const calcIncFromNon = (nonVal: number, rate: number) => Math.round(nonVal * (1 + rate / 100));
   const calcNonFromInc = (incVal: number, rate: number) => Math.round(incVal / (1 + rate / 100));
+
+  const syncUnitHpp = (packageHpp: number) => {
+    setUnitRows(rows => synchronizeUnitPurchasePrices(
+      rows,
+      purchasePricePerBaseFromPackage(packageHpp, rows[0]),
+    ));
+  };
 
   // Live Input Handlers for PPN Auto-Calculations
   const handlePpnRateChange = (newRate: number) => {
     setPpnRate(newRate);
     const newPurInc = calcIncFromNon(purchasePriceNonPpn, newRate);
     setPurchasePriceIncPpn(newPurInc);
+    syncUnitHpp(newPurInc);
 
     const newPriceInc = calcIncFromNon(priceNonPpn, newRate);
     setPriceIncPpn(newPriceInc);
@@ -139,25 +156,37 @@ export const MedicinesView: React.FC = () => {
 
   const handlePurchaseNonPpnChange = (val: number) => {
     setPurchasePriceNonPpn(val);
-    setPurchasePriceIncPpn(calcIncFromNon(val, ppnRate));
+    const inc = calcIncFromNon(val, ppnRate);
+    setPurchasePriceIncPpn(inc);
+    syncUnitHpp(isPpnIncluded ? inc : val);
   };
 
   const handlePurchaseIncPpnChange = (val: number) => {
     setPurchasePriceIncPpn(val);
     setPurchasePriceNonPpn(calcNonFromInc(val, ppnRate));
+    syncUnitHpp(isPpnIncluded ? val : calcNonFromInc(val, ppnRate));
   };
 
-  const handlePriceNonPpnChange = (val: number) => {
+  const handlePriceNonPpnChange = (val: number, syncMargin = true) => {
     setPriceNonPpn(val);
     setPriceIncPpn(calcIncFromNon(val, ppnRate));
+    if (editingMedicine && syncMargin) setMarginPct(Math.max(0, markupPctFromPrice(val, Number(purchasePriceNonPpn || 0) + Number(bhpAmount || 0))));
   };
 
-  const handlePriceIncPpnChange = (val: number) => {
+  const handlePriceIncPpnChange = (val: number, syncMargin = true) => {
     setPriceIncPpn(val);
     setPriceNonPpn(calcNonFromInc(val, ppnRate));
+    if (editingMedicine && syncMargin) setMarginPct(Math.max(0, markupPctFromPrice(val, Number(purchasePriceIncPpn || 0) + Number(bhpAmount || 0))));
+  };
+
+  const quickAddCustomer = async () => {
+    const customerName = window.prompt('Nama customer baru:')?.trim();
+    const phone = window.prompt('Nomor HP customer:')?.trim();
+    if (customerName && phone) await addCustomer({ name: customerName, phone, status: 'Aktif' });
   };
 
   const openAddModal = () => {
+    setAlertMessage(null);
     setEditingMedicine(null);
     const count = medicines.length + 1;
     setCode(`OBT-${String(count).padStart(3, '0')}`);
@@ -165,7 +194,7 @@ export const MedicinesView: React.FC = () => {
     setItemType('obat');
     setCategory('Obat Bebas');
     setBhpAmount(0);
-    setMarginPct(20);
+    setMarginPct(0);
 
     const rate = 11;
     setPpnRate(rate);
@@ -182,8 +211,12 @@ export const MedicinesView: React.FC = () => {
     setPriceNonPpn(pNon);
 
     setStock(10);
+    setStockAdjustmentNote('');
     setMinStock(10);
-    setUnit('Strip');
+    setUnit('Pcs');
+    setUnitRows([{ unit: 'Pcs', multiplierToBase: 1, sortOrder: 0, purchasePricePerBase: 0, isPrimary: true }]);
+    setCustomPrices([]);
+    setNormalCustomerPrices([]);
 
     const nextYear = new Date();
     nextYear.setFullYear(nextYear.getFullYear() + 1);
@@ -194,13 +227,14 @@ export const MedicinesView: React.FC = () => {
   };
 
   const openEditModal = (med: Medicine) => {
+    setAlertMessage(null);
     setEditingMedicine(med);
     setCode(med.code);
     setName(med.name);
     setItemType(med.itemType || 'obat');
     setCategory(med.category);
     setBhpAmount(med.bhpAmount || 0);
-    setMarginPct(med.marginPct || 20);
+    setMarginPct(med.marginPct ?? 0);
 
     const incPpn = med.isPpnIncluded ?? true;
     const rate = incPpn ? (med.ppnRate ?? 11) : 0;
@@ -227,8 +261,12 @@ export const MedicinesView: React.FC = () => {
     }
 
     setStock(med.stock);
+    setStockAdjustmentNote('');
     setMinStock(med.minStock);
     setUnit(med.unit);
+    setUnitRows(getMedicineUnits(med).map(item => ({ ...item })));
+    setCustomPrices((med.customPrices || []).map(price => ({ ...price, customerPrices: (price.customerPrices || []).map(customer => ({ ...customer })) })));
+    setNormalCustomerPrices((med.normalCustomerPrices ?? []).map(price => ({ ...price })));
     setExpiredDate(med.expiredDate);
     setLocation(med.location || '');
     setIsActive(med.isActive);
@@ -238,14 +276,41 @@ export const MedicinesView: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim() || !name.trim() || priceIncPpn < 0 || priceNonPpn < 0) {
-      alert('Mohon isi kode, nama obat, dan harga yang valid.');
+      setAlertMessage('Mohon isi kode, nama obat, dan harga yang valid.');
       return;
     }
+    setAlertMessage(null);
 
     const isPpn = isPpnIncluded;
     const rate = isPpn ? Number(ppnRate) : 0;
     const finalPrice = isPpn ? Number(priceIncPpn) : Number(priceNonPpn);
     const finalPurchase = isPpn ? Number(purchasePriceIncPpn) : Number(purchasePriceNonPpn);
+    const effectivePurchase = editingMedicine ? finalPurchase : 0;
+
+    const sourceUnits = normalizeMedicineUnits(unitRows.length ? unitRows : [{ unit: unit, multiplierToBase: unit === 'Lusin' ? 12 : 1, sortOrder: 0, purchasePricePerBase: 0, isPrimary: true }]);
+    const primaryUnit = sourceUnits[0];
+    const canonicalHpp = editingMedicine
+      ? purchasePricePerBaseFromPackage(effectivePurchase, primaryUnit)
+      : 0;
+    const configuredUnits = synchronizeUnitPurchasePrices(sourceUnits, canonicalHpp).map((row, index) => ({
+      ...row,
+      id: row.id || `unit-${Date.now()}-${index}`,
+      medicineId: editingMedicine?.id || '',
+      sortOrder: index,
+      ...(editingMedicine && index === 0 ? { sellingPrice: finalPrice, marginPct: Number(marginPct), bhpAmount: Number(bhpAmount) } : {}),
+    }));
+    const unitIds = new Map<string, string>();
+    configuredUnits.forEach(row => {
+      const id = row.id || row.unit;
+      unitIds.set(id, id);
+      unitIds.set(row.unit, id);
+    });
+    const configuredCustomPrices = customPrices.map((price, index) => ({
+      ...price,
+      medicineId: editingMedicine?.id,
+      unitId: unitIds.get(price.unitId) || unitIds.get(price.unitName || '') || price.unitId,
+      sortOrder: index,
+    }));
 
     const medData = {
       code,
@@ -253,27 +318,29 @@ export const MedicinesView: React.FC = () => {
       itemType,
       category,
       price: finalPrice,
-      purchasePrice: finalPurchase,
-      marginPct: Number(marginPct),
-      bhpAmount: Number(bhpAmount),
-      unitMultiplier: unit === 'Lusin' ? 12 : 1,
-      stock: editingMedicine ? editingMedicine.stock : Number(stock),
+      purchasePrice: effectivePurchase,
+      marginPct: editingMedicine ? Number(marginPct) : 0,
+      bhpAmount: editingMedicine ? Number(bhpAmount) : 0,
+      unitMultiplier: Number(primaryUnit?.multiplierToBase) || (primaryUnit?.unit === 'Lusin' ? 12 : 1),
+      stock: Number(stock),
       minStock: Number(minStock),
-      unit,
+      unit: primaryUnit?.unit || unit,
       expiredDate,
       location,
       isActive,
       ppnRate: rate,
       isPpnIncluded: isPpn,
-      purchasePriceNonPpn: isPpn ? Number(purchasePriceNonPpn) : finalPurchase,
-      purchasePriceIncPpn: isPpn ? Number(purchasePriceIncPpn) : finalPurchase,
+      purchasePriceNonPpn: isPpn ? Number(purchasePriceNonPpn) : effectivePurchase,
+      purchasePriceIncPpn: isPpn ? Number(purchasePriceIncPpn) : effectivePurchase,
       priceNonPpn: isPpn ? Number(priceNonPpn) : finalPrice,
       priceIncPpn: isPpn ? Number(priceIncPpn) : finalPrice,
+      units: configuredUnits,
+      customPrices: configuredCustomPrices,
+      normalCustomerPrices,
     };
 
     if (editingMedicine) {
-      const { stock: _omitStock, ...updateFields } = medData;
-      updateMedicine(editingMedicine.id, updateFields);
+      updateMedicine(editingMedicine.id, medData, stockAdjustmentNote);
     } else {
       addMedicine(medData);
     }
@@ -378,14 +445,24 @@ export const MedicinesView: React.FC = () => {
             Pengelolaan data sediaan farmasi, konversi otomatis Harga Non-PPN & Harga (+PPN 11%), serta pantauan stok & kadaluwarsa.
           </p>
         </div>
-        <button
-          onClick={openAddModal}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-xs flex items-center gap-2 transition-colors self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          Tambah Obat Baru (+ Atur PPN)
-        </button>
+        <div className="flex flex-col sm:flex-row sm:items-start gap-2 self-start sm:self-auto">
+          <SyncCustomerPricesButton />
+          <button
+            onClick={openAddModal}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-xs flex items-center gap-2 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Tambah Obat Baru (+ Atur PPN)
+          </button>
+        </div>
       </div>
+
+      {alertMessage && !isFormOpen && (
+        <InlineNotice
+          message={alertMessage}
+          onDismiss={() => setAlertMessage(null)}
+        />
+      )}
 
       {/* PPN & Pricing Info Banner */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -701,7 +778,6 @@ export const MedicinesView: React.FC = () => {
               const pNon = med.priceNonPpn || Math.round(pInc / (1 + rate / 100));
               const purInc = med.purchasePriceIncPpn || med.purchasePrice || 0;
               const purNon = med.purchasePriceNonPpn || Math.round(purInc / (1 + rate / 100));
-
               return (
                 <div
                   key={med.id}
@@ -755,7 +831,7 @@ export const MedicinesView: React.FC = () => {
                       <span className="text-slate-400 block text-[10px] font-bold">Stok Tersedia:</span>
                       <div className="flex items-center gap-1 mt-0.5">
                         <span className={`font-bold ${isLowStock ? 'text-rose-600' : 'text-slate-900'}`}>
-                          {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
+                          {formatStockDisplay(med.stock, med.unit, med.unitMultiplier, med.units)}
                         </span>
                         <span className="text-[9px] text-slate-400">(Min: {med.minStock})</span>
                       </div>
@@ -765,6 +841,11 @@ export const MedicinesView: React.FC = () => {
                         </span>
                       )}
                     </div>
+                  </div>
+
+                  <div className="rounded-xl border border-indigo-100 bg-white p-2.5">
+                    <span className="mb-1.5 block text-[10px] font-extrabold uppercase tracking-wide text-indigo-700">Semua Harga Aktif</span>
+                    <MedicinePriceSummary medicine={med} customers={customers} excludePrimaryNormal />
                   </div>
 
                   <div className="flex items-center justify-between pt-1 text-[11px]">
@@ -899,7 +980,6 @@ export const MedicinesView: React.FC = () => {
 
                   const isPpn = med.isPpnIncluded ?? true;
                   const rate = isPpn ? (med.ppnRate ?? 11) : 0;
-
                   let pInc: number;
                   let pNon: number;
                   let purInc: number;
@@ -1027,6 +1107,10 @@ export const MedicinesView: React.FC = () => {
                             )}
                           </>
                         )}
+                        <div className="mt-2 border-t border-slate-100 pt-2">
+                          <div className="mb-1 text-[9px] font-extrabold uppercase tracking-wide text-indigo-700">Semua Harga Aktif</div>
+                          <MedicinePriceSummary medicine={med} customers={customers} excludePrimaryNormal />
+                        </div>
                       </td>
 
                       {/* Stock */}
@@ -1037,7 +1121,7 @@ export const MedicinesView: React.FC = () => {
                               isLowStock ? 'text-rose-600' : 'text-slate-900'
                             }`}
                           >
-                            {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
+                            {formatStockDisplay(med.stock, med.unit, med.unitMultiplier, med.units)}
                           </span>
                           <span className="text-[10px] text-slate-500">
                             (Min: {med.minStock})
@@ -1147,7 +1231,7 @@ export const MedicinesView: React.FC = () => {
       {/* Add / Edit Medicine Modal with StockInView layout */}
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl p-6 space-y-5 animate-fade-in my-8 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-none w-full border border-slate-200 shadow-2xl p-6 space-y-5 animate-fade-in my-8 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-slate-100 pb-4">
               <div className="flex items-center gap-3">
                 <div className={`p-2.5 rounded-2xl text-white ${itemType === 'obat' ? 'bg-emerald-600' : 'bg-purple-600'}`}>
@@ -1159,7 +1243,7 @@ export const MedicinesView: React.FC = () => {
                       ? `Edit ${itemType === 'obat' ? 'Sediaan Obat' : 'Barang Non-Obat'}`
                       : `Tambah ${itemType === 'obat' ? 'Obat Baru' : 'Barang Non-Obat Baru'}`}
                   </h3>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-sm text-slate-500">
                     {editingMedicine
                       ? 'Penetapan harga jual otomatis berbasis Modal, BHP (Bahan Habis Pakai), dan Persentase Margin.'
                       : 'Atur data produk dan penetapan harga jual kasir.'}
@@ -1175,7 +1259,13 @@ export const MedicinesView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+            <form onSubmit={handleSubmit} className="space-y-4 text-sm">
+              {alertMessage && (
+                <InlineNotice
+                  message={alertMessage}
+                  onDismiss={() => setAlertMessage(null)}
+                />
+              )}
               {/* Item Type Selector Switcher (Hanya Bisa Dipilih Saat Tambah Item Baru) */}
               {!editingMedicine ? (
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3">
@@ -1189,7 +1279,7 @@ export const MedicinesView: React.FC = () => {
                           setCategory('Obat Bebas');
                         }
                       }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                      className={`px-3 py-1.5 rounded-lg text-sm font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
                         itemType === 'obat'
                           ? 'bg-emerald-600 text-white shadow-xs'
                           : 'bg-white text-slate-600 border border-slate-200'
@@ -1206,7 +1296,7 @@ export const MedicinesView: React.FC = () => {
                           setCategory('Barang Umum');
                         }
                       }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                      className={`px-3 py-1.5 rounded-lg text-sm font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
                         itemType === 'non_obat'
                           ? 'bg-purple-600 text-white shadow-xs'
                           : 'bg-white text-slate-600 border border-slate-200'
@@ -1220,7 +1310,7 @@ export const MedicinesView: React.FC = () => {
               ) : (
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3">
                   <span className="font-bold text-slate-700">Tipe / Klasifikasi Produk:</span>
-                  <span className={`px-3 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1.5 ${
+                  <span className={`px-3 py-1 rounded-lg text-sm font-extrabold flex items-center gap-1.5 ${
                     itemType === 'obat' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-purple-100 text-purple-800 border border-purple-300'
                   }`}>
                     {itemType === 'obat' ? <Pill className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5" />}
@@ -1285,21 +1375,14 @@ export const MedicinesView: React.FC = () => {
                   <label className="block font-bold text-slate-700 mb-1">Satuan</label>
                   <select
                     value={unit}
-                    onChange={e => setUnit(e.target.value)}
+                    onChange={e => {
+                      const nextUnit = e.target.value;
+                      setUnit(nextUnit);
+                      setUnitRows(rows => synchronizePrimaryUnit(rows, nextUnit));
+                    }}
                     className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value="Strip">Strip</option>
-                    <option value="Botol">Botol</option>
-                    <option value="Tube">Tube</option>
-                    <option value="Box">Box</option>
-                    <option value="Tablet">Tablet</option>
-                    <option value="Blister">Blister</option>
-                    <option value="Pcs">Pcs</option>
-                    <option value="Ampul">Ampul</option>
-                    <option value="Sachet">Sachet</option>
-                    <option value="Dus">Dus</option>
-                    <option value="Pack">Pack</option>
-                    <option value="Lusin">Lusin</option>
+                    {AVAILABLE_UNITS.map(option => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </div>
 
@@ -1317,29 +1400,58 @@ export const MedicinesView: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    {editingMedicine ? 'Stok Saat Ini (Terkunci)' : `Stok Awal (${unit})`}
-                  </label>
-                  {editingMedicine ? (
-                    <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 font-bold text-slate-700">
-                      {formatStockDisplay(editingMedicine.stock, editingMedicine.unit, editingMedicine.unitMultiplier)}
-                    </div>
-                  ) : (
-                    <input
-                      type="number"
-                      min="0"
-                      value={stock}
-                      onChange={e => setStock(Number(e.target.value))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  )}
-                  {editingMedicine ? (
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      Stok awal tidak dapat diubah di sini. Gunakan Stok Masuk atau Stok Opnam.
-                    </p>
-                  ) : (
-                    null
-                  )}
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-slate-700">
+                      {editingMedicine ? 'Stok Fisik (Satuan Dasar) *' : 'Stok Awal (Satuan Dasar) *'}
+                    </label>
+                    {editingMedicine && (
+                       <span className="text-xs text-slate-500 font-medium">
+                        Awal: <strong className="text-slate-800 font-bold">{editingMedicine.stock}</strong> Pcs dasar
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={stock}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setStock(val === '' ? 0 : Math.max(0, parseInt(val, 10) || 0));
+                    }}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">Stok selalu disimpan dan dihitung dalam satuan dasar (Pcs dasar).</p>
+                  {editingMedicine && (() => {
+                    const diff = stock - editingMedicine.stock;
+                    if (diff === 0) {
+                      return (
+                        <p className="text-xs text-slate-500 mt-1 flex items-center gap-1 font-medium">
+                          <Info className="w-3 h-3 text-slate-400 shrink-0" />
+                          Stok tidak berubah (0 selisih).
+                        </p>
+                      );
+                    }
+                    if (diff > 0) {
+                      return (
+                        <p className="text-xs text-emerald-700 mt-1 flex items-center gap-1 font-bold">
+                          <span className="inline-block px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 text-xs font-extrabold">
+                            +{diff} Pcs dasar
+                          </span>
+                          Penambahan stok dicatat ke riwayat.
+                        </p>
+                      );
+                    }
+                    return (
+                      <p className="text-xs text-rose-700 mt-1 flex items-center gap-1 font-bold">
+                        <span className="inline-block px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 text-xs font-extrabold">
+                            {diff} Pcs dasar
+                        </span>
+                        Pengurangan stok dicatat ke riwayat.
+                      </p>
+                    );
+                  })()}
                 </div>
 
                 <div>
@@ -1364,15 +1476,35 @@ export const MedicinesView: React.FC = () => {
                 </div>
               </div>
 
+              {/* STOCK ADJUSTMENT REASON FIELD - Tampil bila stok diubah saat mode Edit */}
+              {editingMedicine && stock !== editingMedicine.stock && (
+                <div className="bg-amber-50/80 border border-amber-200 p-3.5 rounded-2xl space-y-1.5 animate-in fade-in duration-200 shadow-2xs">
+                  <label className="block text-sm font-bold text-amber-900 flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-amber-700" />
+                    Catatan / Alasan Penyesuaian Stok (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={stockAdjustmentNote}
+                    onChange={e => setStockAdjustmentNote(e.target.value)}
+                    placeholder={`cth. Koreksi fisik rak ${location || 'A1'} / opnam manual`}
+                    className="w-full border border-amber-300 bg-white rounded-xl px-3 py-2 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <p className="text-xs text-amber-700 font-medium">
+                    Perubahan selisih stok (<strong>{editingMedicine.stock}</strong> → <strong>{stock}</strong>) otomatis disimpan ke log riwayat mutasi stok.
+                  </p>
+                </div>
+              )}
+
               {/* AUTOMATIC PRICING & MARGIN SECTION - Hanya Tampil Saat Edit Item */}
               {editingMedicine && (
                 <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
-                  <h4 className="font-extrabold text-slate-800 text-xs flex items-center gap-2">
+                  <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-2">
                     <Calculator className="w-4 h-4 text-emerald-600" />
                     Kalkulasi Otomatis Harga Jual (Harga Beli + BHP + Margin)
                   </h4>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">Harga Beli / Modal (Rp) *</label>
                       <input
@@ -1390,38 +1522,47 @@ export const MedicinesView: React.FC = () => {
                         }}
                         className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       />
-                    </div>
+                     </div>
 
                     <div>
-                      <label className="block font-bold text-slate-700 mb-1">Bahan Habis Pakai / BHP (Rp)</label>
+                      <label className="block font-bold text-slate-700 mb-1">Margin harga normal (%)</label>
                       <input
                         type="number"
                         min="0"
-                        value={bhpAmount}
+                        step="0.5"
+                        value={marginPct}
                         onChange={e => {
-                          const val = Number(e.target.value);
-                          setBhpAmount(val);
+                          const margin = Math.max(0, Number(e.target.value) || 0);
+                          setMarginPct(margin);
+                          const hpp = Number((isPpnIncluded ? purchasePriceIncPpn : purchasePriceNonPpn) || 0);
+                          const price = Math.round((hpp + Number(bhpAmount || 0)) * (1 + margin / 100));
+                          if (isPpnIncluded) handlePriceIncPpnChange(price, false);
+                          else handlePriceNonPpnChange(price, false);
                         }}
                         placeholder="0"
                         className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       />
                     </div>
 
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Margin Keuntungan (%) *</label>
+                   <div>
+                      <label className="block font-bold text-slate-700 mb-1">Bahan Habis Pakai / BHP (Rp)</label>
                       <input
                         type="number"
                         min="0"
-                        step="0.5"
-                        required
-                        value={marginPct}
+                        value={bhpAmount}
                         onChange={e => {
-                          const val = Number(e.target.value);
-                          setMarginPct(val);
+                          const val = Math.max(0, Number(e.target.value) || 0);
+                          setBhpAmount(val);
+                          const hpp = Number((isPpnIncluded ? purchasePriceIncPpn : purchasePriceNonPpn) || 0);
+                          const price = Math.round((hpp + val) * (1 + Number(marginPct || 0) / 100));
+                          if (isPpnIncluded) handlePriceIncPpnChange(price, false);
+                          else handlePriceNonPpnChange(price, false);
                         }}
+                        placeholder="0"
                         className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       />
                     </div>
+
                   </div>
 
                   {/* DYNAMIC PRICE RESULT DISPLAY WITH APPLY ACTION BUTTON */}
@@ -1434,29 +1575,29 @@ export const MedicinesView: React.FC = () => {
 
                     const handleApplyCalculatedPrice = () => {
                       if (isPpnIncluded) {
-                        handlePriceIncPpnChange(computedSellingPrice);
+                        handlePriceIncPpnChange(computedSellingPrice, false);
                       } else {
-                        handlePriceNonPpnChange(computedSellingPrice);
+                        handlePriceNonPpnChange(computedSellingPrice, false);
                       }
                     };
 
                     return (
                       <div className="bg-emerald-900 text-white p-3.5 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 font-mono shadow-xs">
                         <div>
-                          <span className="text-[10px] text-emerald-300 font-sans block">Simulasi Formula Harga Jual:</span>
-                          <span className="text-xs font-semibold text-emerald-100">
+                           <span className="text-xs text-emerald-300 font-sans block">Simulasi Formula Harga Jual:</span>
+                          <span className="text-sm font-semibold text-emerald-100">
                             Total HPP ({formatRupiah(hpp)} + BHP {formatRupiah(bhp)}) = <strong className="text-white">{formatRupiah(totalHpp)}</strong>
                           </span>
                         </div>
                         <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
                           <div className="text-right">
-                            <span className="text-[10px] text-emerald-300 font-sans block">Harga Kalkulasi (+{margin}% Margin):</span>
+                             <span className="text-xs text-emerald-300 font-sans block">Harga Kalkulasi (+{margin}% Margin):</span>
                             <span className="text-base font-extrabold text-amber-300">{formatRupiah(computedSellingPrice)}</span>
                           </div>
                           <button
                             type="button"
                             onClick={handleApplyCalculatedPrice}
-                            className="px-3 py-2 bg-amber-400 hover:bg-amber-300 text-emerald-950 font-extrabold rounded-xl text-xs font-sans transition-all shadow-md flex items-center gap-1.5 shrink-0 cursor-pointer active:scale-95"
+                            className="px-3 py-2 bg-amber-400 hover:bg-amber-300 text-emerald-950 font-extrabold rounded-xl text-sm font-sans transition-all shadow-md flex items-center gap-1.5 shrink-0 cursor-pointer active:scale-95"
                           >
                             <CheckCircle2 className="w-4 h-4" />
                             Terapkan Ke Harga Jual
@@ -1475,7 +1616,7 @@ export const MedicinesView: React.FC = () => {
                     <div className="p-1 rounded bg-emerald-500/20 text-emerald-400">
                       <Receipt className="w-3.5 h-3.5" />
                     </div>
-                    <span className="font-extrabold text-xs text-white">Detail Skema PPN & Harga Jual Kasir</span>
+                    <span className="font-extrabold text-sm text-white">Detail Skema PPN & Harga Jual Kasir</span>
                   </div>
 
                   <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
@@ -1486,7 +1627,7 @@ export const MedicinesView: React.FC = () => {
                         const rate = ppnRate > 0 ? ppnRate : 11;
                         handlePpnRateChange(rate);
                       }}
-                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-colors ${
+                       className={`px-2 py-0.5 rounded text-xs font-extrabold transition-colors ${
                         isPpnIncluded ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
                       }`}
                     >
@@ -1498,7 +1639,7 @@ export const MedicinesView: React.FC = () => {
                         setIsPpnIncluded(false);
                         handlePpnRateChange(0);
                       }}
-                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-colors ${
+                       className={`px-2 py-0.5 rounded text-xs font-extrabold transition-colors ${
                         !isPpnIncluded ? 'bg-amber-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
                       }`}
                     >
@@ -1509,38 +1650,65 @@ export const MedicinesView: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[10px] font-semibold text-slate-300 mb-1">
+                     <label className="block text-xs font-semibold text-slate-300 mb-1">
                       Harga Jual Non-PPN (DPP)
                     </label>
                     <div className="relative">
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-[10px]">Rp</span>
+                       <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">Rp</span>
                       <input
                         type="number"
                         min="0"
                         value={priceNonPpn}
                         onChange={e => handlePriceNonPpnChange(Number(e.target.value))}
-                        className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-bold text-xs focus:outline-none focus:border-indigo-500"
+                        className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-bold text-sm focus:outline-none focus:border-indigo-500"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-indigo-300 mb-1">
+                     <label className="block text-xs font-bold text-indigo-300 mb-1">
                       Harga Jual + PPN ({ppnRate || 11}%)
                     </label>
                     <div className="relative">
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-indigo-300 font-bold text-[10px]">Rp</span>
+                       <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-indigo-300 font-bold text-xs">Rp</span>
                       <input
                         type="number"
                         min="0"
                         value={priceIncPpn}
                         onChange={e => handlePriceIncPpnChange(Number(e.target.value))}
-                        className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-indigo-500/50 text-indigo-200 font-extrabold text-xs focus:outline-none focus:border-indigo-400"
+                        className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-indigo-500/50 text-indigo-200 font-extrabold text-sm focus:outline-none focus:border-indigo-400"
                       />
                     </div>
                   </div>
-                </div>
+               </div>
               </div>
+
+              <MedicineUnitEditor
+                units={unitRows}
+                customPrices={customPrices}
+                normalCustomerPrices={normalCustomerPrices}
+                customers={customers}
+                onAddCustomer={quickAddCustomer}
+                enableMarginPricing={Boolean(editingMedicine)}
+                normalPrice={isPpnIncluded ? priceIncPpn : priceNonPpn}
+                normalMarginPct={marginPct}
+                normalBhpAmount={bhpAmount}
+                purchasePricePerBase={purchasePricePerBaseFromPackage(
+                  isPpnIncluded ? purchasePriceIncPpn : purchasePriceNonPpn,
+                  unitRows[0],
+                )}
+                 onChange={rows => {
+                  const normalizedRows = normalizeMedicineUnits(rows);
+                  const primary = normalizedRows[0];
+                  const packageHpp = isPpnIncluded ? purchasePriceIncPpn : purchasePriceNonPpn;
+                  setUnitRows(synchronizeUnitPurchasePrices(normalizedRows, purchasePricePerBaseFromPackage(packageHpp, primary)));
+                  if (primary) {
+                    setUnit(primary.unit);
+                  }
+                }}
+                onCustomPricesChange={setCustomPrices}
+                onNormalCustomerPricesChange={setNormalCustomerPrices}
+              />
 
               <div className="flex items-center gap-3 pt-2 justify-between">
                 <label className="flex items-center gap-2 font-bold text-slate-700 cursor-pointer">
@@ -1557,13 +1725,13 @@ export const MedicinesView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setIsFormOpen(false)}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors"
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-colors"
                   >
                     Batal
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs transition-all shadow-md flex items-center gap-1.5"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md flex items-center gap-1.5"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     {editingMedicine ? 'Simpan Perubahan' : 'Simpan Item Baru'}
@@ -1582,7 +1750,9 @@ export const MedicinesView: React.FC = () => {
             <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full border border-slate-100 overflow-hidden text-left my-auto animate-in fade-in duration-200">
               <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-sm">Riwayat Mutasi Stok Obat</h3>
+                <h3 className="font-bold text-sm">
+                  Riwayat Mutasi Stok {selectedHistoryMed.itemType === 'non_obat' ? 'Barang Non-Obat' : 'Obat'}
+                </h3>
                 <p className="text-xs text-slate-400">
                   {selectedHistoryMed.name} ({selectedHistoryMed.code})
                 </p>
@@ -1608,7 +1778,7 @@ export const MedicinesView: React.FC = () => {
                 if (medHistoryList.length === 0) {
                   return (
                     <p className="text-center text-slate-400 py-6 text-xs">
-                      Belum ada log pergerakan stok untuk obat ini.
+                      Belum ada log pergerakan stok untuk {selectedHistoryMed.itemType === 'non_obat' ? 'barang non-obat' : 'obat'} ini.
                     </p>
                   );
                 }
@@ -1650,7 +1820,7 @@ export const MedicinesView: React.FC = () => {
                                 sh.amount > 0 ? 'text-emerald-600' : 'text-rose-600'
                               }`}
                             >
-                              {sh.amount > 0 ? `+${sh.amount}` : sh.amount}
+                              {sh.inputQty !== undefined && sh.inputUnit ? `${sh.amount > 0 ? '+' : ''}${sh.inputQty} ${sh.inputUnit} (${sh.amount} Pcs dasar)` : (sh.amount > 0 ? `+${sh.amount} Pcs dasar` : `${sh.amount} Pcs dasar`)}
                             </td>
                             <td className="py-2 font-mono font-bold text-slate-900">{sh.newStock}</td>
                             <td className="py-2 text-slate-600">{sh.note}</td>
@@ -1780,28 +1950,6 @@ export const MedicinesView: React.FC = () => {
       </div>
       )}
 
-      {/* Custom Alert Modal */}
-      {alertMessage && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-6">
-            <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 space-y-4 text-center my-auto animate-in fade-in">
-              <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
-                <Info className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm mb-1">Akses Dibatasi</h3>
-                <p className="text-xs text-slate-600">{alertMessage}</p>
-              </div>
-              <button
-                onClick={() => setAlertMessage(null)}
-                className="w-full py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 transition-colors"
-              >
-                Mengerti
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

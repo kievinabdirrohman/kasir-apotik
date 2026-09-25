@@ -121,7 +121,7 @@ export const NotificationCenter: React.FC = () => {
                         </span>
                       </div>
                       <p className="text-slate-500 text-[11px] mt-0.5">
-                        Expired pada {med.expiredDate} ({med.code})
+                        Expired pada {med.expiredDate} ({med.code}){med.noBatch ? ` • Batch: ${med.noBatch}` : ''}
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-600 shrink-0 self-center" />
@@ -152,7 +152,7 @@ export const NotificationCenter: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-slate-500 text-[11px] mt-0.5">
-                          Tgl Expired: {med.expiredDate} • Stok: {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
+                          Tgl Expired: {med.expiredDate} • Stok: {formatStockDisplay(med.stock, med.unit, med.unitMultiplier, med.units)}{med.noBatch ? ` • Batch: ${med.noBatch}` : ''}
                         </p>
                       </div>
                       <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-600 shrink-0 self-center" />
@@ -177,11 +177,11 @@ export const NotificationCenter: React.FC = () => {
                       <div className="flex items-center justify-between gap-1">
                         <span className="font-semibold text-slate-900 truncate">{med.name}</span>
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 shrink-0">
-                          Stok: {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)}
+                          Stok: {formatStockDisplay(med.stock, med.unit, med.unitMultiplier, med.units)}
                         </span>
                       </div>
                       <p className="text-slate-500 text-[11px] mt-0.5">
-                        Sisa {formatStockDisplay(med.stock, med.unit, med.unitMultiplier)} (Min: {med.minStock})
+                        Sisa {formatStockDisplay(med.stock, med.unit, med.unitMultiplier, med.units)} (Min: {med.minStock}){med.noBatch ? ` • Batch: ${med.noBatch}` : ''}
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-600 shrink-0 self-center" />

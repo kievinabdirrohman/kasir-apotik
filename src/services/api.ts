@@ -7,6 +7,8 @@ import type {
   StockHistory,
   CashFlow,
   PharmacySettings,
+  MedicineCustomerPrice,
+  MedicineCustomPrice,
 } from '../types';
 
 let cachedBaseUrl: string | null = null;
@@ -226,6 +228,58 @@ export function updateSettings(s: Partial<PharmacySettings>): Promise<PharmacySe
   });
 }
 
+// ── Medicine Customer Prices ────────────────────────────────────────────
+
+export function getMedicineCustomerPrices(medicineId?: string): Promise<MedicineCustomerPrice[]> {
+  const qs = medicineId ? `?medicine_id=${medicineId}` : '';
+  return apiFetch<MedicineCustomerPrice[]>('/api/medicine_customer_prices' + qs);
+}
+
+export interface CustomerPriceSyncSummary {
+  customersProcessed: number;
+  normalInserted: number;
+  unitInserted: number;
+  customInserted: number;
+  totalInserted: number;
+}
+
+export function syncCustomerPrices(): Promise<CustomerPriceSyncSummary> {
+  return apiFetch<CustomerPriceSyncSummary>('/api/medicine_customer_prices/sync', { method: 'POST' });
+}
+
+export function addMedicineCustomerPrice(p: Omit<MedicineCustomerPrice, 'id'>): Promise<MedicineCustomerPrice> {
+  return apiFetch<MedicineCustomerPrice>('/api/medicine_customer_prices', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  });
+}
+
+export function deleteMedicineCustomerPrice(id: string): Promise<void> {
+  return apiFetch<void>('/api/medicine_customer_prices/' + id, { method: 'DELETE' });
+}
+
+export function deleteMedicineCustomerPricesByMedicine(medicineId: string): Promise<void> {
+  return apiFetch<void>('/api/medicine_customer_prices/by-medicine/' + medicineId, { method: 'DELETE' });
+}
+
+export function getMedicineCustomPrices(medicineId?: string): Promise<MedicineCustomPrice[]> {
+  const qs = medicineId ? `?medicine_id=${medicineId}` : '';
+  return apiFetch<MedicineCustomPrice[]>('/api/medicine_custom_prices' + qs);
+}
+
+export function addMedicineCustomPrice(price: Omit<MedicineCustomPrice, 'id'> & { customerIds?: string[]; customerPrice?: number; applyAll?: boolean }): Promise<MedicineCustomPrice> {
+  return apiFetch<MedicineCustomPrice>('/api/medicine_custom_prices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(price) });
+}
+
+export function updateMedicineCustomPrice(id: string, price: Partial<MedicineCustomPrice> & { customerIds?: string[]; customerPrice?: number; applyAll?: boolean }): Promise<MedicineCustomPrice> {
+  return apiFetch<MedicineCustomPrice>('/api/medicine_custom_prices/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(price) });
+}
+
+export function deleteMedicineCustomPrice(id: string): Promise<void> {
+  return apiFetch<void>('/api/medicine_custom_prices/' + id, { method: 'DELETE' });
+}
+
 // ── Reset ──────────────────────────────────────────────────────────────────
 
 export function resetData(payload: {
@@ -256,8 +310,9 @@ export async function initializeApp(): Promise<{
   stockHistory: StockHistory[];
   cashFlows: CashFlow[];
   settings: PharmacySettings;
+  medicineCustomerPrices: MedicineCustomerPrice[];
 }> {
-  const [medicines, customers, doctors, users, transactions, stockHistory, cashFlows, settings] =
+  const [medicines, customers, doctors, users, transactions, stockHistory, cashFlows, settings, medicineCustomerPrices] =
     await Promise.all([
       getMedicines(),
       getCustomers(),
@@ -267,6 +322,7 @@ export async function initializeApp(): Promise<{
       getStockHistory(),
       getCashFlows(),
       getSettings(),
+      getMedicineCustomerPrices(),
     ]);
-  return { medicines, customers, doctors, users, transactions, stockHistory, cashFlows, settings };
+  return { medicines, customers, doctors, users, transactions, stockHistory, cashFlows, settings, medicineCustomerPrices };
 }

@@ -1,5 +1,7 @@
 import type { Transaction, PharmacySettings } from '../types';
 import { formatRupiah, formatDateTime, formatCashierName, isPpnTransaction } from './formatters';
+import { normalizePrinterSettings } from './printerSettings';
+import { transactionItemReceiptQuantityLabel, transactionItemSalePrice } from './unitConversion';
 
 function esc(value: unknown): string {
   if (value === undefined || value === null) return '';
@@ -21,13 +23,19 @@ export function buildReceiptHtml(params: {
   paperWidth?: string;
 }): string {
   const { transaction: t, settings } = params;
-  const paperWidth = params.paperWidth ?? settings.paperWidth ?? '58mm';
-  const widthMm = paperWidth === '80mm' ? 80 : 58;
-  const fontSize = paperWidth === '80mm' ? 13 : 11;
-  const lineHeight = 1.35;
+  const printer = normalizePrinterSettings(
+    settings,
+    params.paperWidth === '80mm' ? '80mm' : (settings.paperWidth === '80mm' ? '80mm' : '58mm')
+  );
+  const widthMm = printer.paperWidth === '80mm' ? 80 : 58;
+  const fontSize = printer.fontSize;
+  // Software margins follow the printer settings exactly; @page also remains zero.
+  const hardwareInsetLeftMm = 0;
+  const hardwareInsetRightMm = 0;
+  const contentWidthMm = Math.max(40, widthMm - printer.marginLeftMm - printer.marginRightMm - hardwareInsetLeftMm - hardwareInsetRightMm);
 
-  const row = (label: string, value: string) =>
-    `<div class="row"><span>${esc(label)}</span><span class="val">${esc(value)}</span></div>`;
+  const row = (label: string, value: string, className = '') =>
+    `<div class="row ${className}"><span class="label">${esc(label)}</span><span class="val">${esc(value)}</span></div>`;
 
   const divider = '<div class="dashed"></div>';
 
@@ -47,18 +55,10 @@ export function buildReceiptHtml(params: {
 
   const itemRows = t.items
     .map((item) => {
-      const qtyLine =
-        item.qty +
-        ' ' +
-        esc(item.unit) +
-        (item.unit === 'Lusin' || (item.unitMultiplier && item.unitMultiplier > 1)
-          ? ` (${item.qty * (item.unit === 'Lusin' ? 12 : item.unitMultiplier || 1)} pcs)`
-          : '') +
-        ' x ' +
-        formatRupiah(item.price);
+      const qtyLine = `${transactionItemReceiptQuantityLabel(item)} @ ${formatRupiah(transactionItemSalePrice(item))}`;
       return `
         <div class="item">${esc(item.medicineName)}</div>
-        <div class="row"><span>${qtyLine}</span><span class="val">${formatRupiah(item.subtotal)}</span></div>`;
+        <div class="row item-row"><span class="label">${qtyLine}</span><span class="val">${formatRupiah(item.subtotal)}</span></div>`;
     })
     .join('');
 
@@ -71,24 +71,29 @@ export function buildReceiptHtml(params: {
   @page { size: ${widthMm}mm auto; margin: 0; }
   * { box-sizing: border-box; }
   body {
-    margin: 0;
-    padding: 3mm;
-    width: ${widthMm}mm;
+    margin: 0 ${hardwareInsetRightMm}mm 0 ${hardwareInsetLeftMm}mm;
+    padding: ${printer.marginTopMm}mm ${printer.marginRightMm}mm ${printer.marginBottomMm}mm ${printer.marginLeftMm}mm;
+    width: ${contentWidthMm}mm;
+    max-width: ${contentWidthMm}mm;
     font-family: 'Courier New', 'Lucida Console', monospace;
-    font-size: ${fontSize}px;
-    line-height: ${lineHeight};
+    font-size: ${fontSize}pt;
+    line-height: ${printer.lineHeight};
     color: #000;
     background: #fff;
   }
   .center { text-align: center; }
   .bold { font-weight: 700; }
-  .row { display: flex; justify-content: space-between; align-items: baseline; }
-  .val { text-align: right; }
+  .row { display: grid; grid-template-columns: ${printer.labelWidthPct}% minmax(0, 1fr); column-gap: ${printer.columnGapMm}mm; align-items: baseline; }
+  .meta { grid-template-columns: 28% minmax(0, 1fr); }
+  .label { min-width: 0; overflow-wrap: anywhere; }
+  .val { min-width: 0; overflow-wrap: anywhere; white-space: nowrap; text-align: ${printer.amountAlignment}; }
+  .meta .val { white-space: normal; }
+  .item-row .label { overflow-wrap: anywhere; }
   .dashed { border-top: 1px dashed #000; margin: 5px 0; }
-  .item { font-weight: 700; }
-  .small { font-size: ${fontSize - 1}px; }
+  .item { font-weight: 700; overflow-wrap: anywhere; }
+  .small { font-size: ${Math.max(7, fontSize - 1)}pt; }
   .footer { white-space: pre-line; text-align: center; margin-top: 5px; }
-  .total { font-size: ${fontSize + 2}px; font-weight: 700; }
+  .total { font-size: ${fontSize}pt; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -100,22 +105,21 @@ export function buildReceiptHtml(params: {
   ${settings.sipaNumber ? `<div class="center small">SIPA: ${esc(settings.sipaNumber)}</div>` : ''}
   ${settings.apotekerName ? `<div class="center small">Apoteker: ${esc(settings.apotekerName)}</div>` : ''}
   ${divider}
-  ${row('No Trx:', t.trxNo)}
-  ${row('Tanggal:', formatDateTime(t.date))}
-  ${row('Kasir:', formatCashierName(t.cashierName))}
-  ${t.customerName ? row('Customer:', t.customerName + (t.customerMemberNo ? ` (${t.customerMemberNo})` : '')) : ''}
-  ${t.isPrescription && t.doctorName ? row('Dokter Resep:', t.doctorName) : ''}
+  ${row('No Trx:', t.trxNo, 'meta')}
+  ${row('Tanggal:', formatDateTime(t.date), 'meta')}
+  ${row('Kasir:', formatCashierName(t.cashierName), 'meta')}
+  ${t.customerName ? row('Customer:', t.customerName, 'meta') : ''}
+  ${t.isPrescription && t.doctorName ? row('Dokter Resep:', t.doctorName, 'meta') : ''}
   ${t.isPrescription && t.prescriptionNote ? `<div class="small">Ket. Resep: ${esc(t.prescriptionNote)}</div>` : ''}
   ${divider}
-  <div class="row bold"><span>Obat (Qty x Harga)</span><span>Subtotal</span></div>
   ${itemRows}
   ${t.isPrescription ? `${divider}${row('Jasa Racikan:', formatRupiah(jasaRacikan))}` : ''}
   ${divider}
-  ${row('Subtotal Produk:', formatRupiah(itemsSubtotal))}
+  ${row('Subtotal:', formatRupiah(itemsSubtotal))}
   ${t.isPrescription ? row('Jasa & Racikan Resep:', '+' + formatRupiah(jasaRacikan)) : ''}
-  ${showPpn ? row('DPP (Nilai Bersih):', formatRupiah(dpp)) : ''}
+  ${showPpn ? row('DPP:', formatRupiah(dpp)) : ''}
   ${showPpn ? row(`PPN (${t.ppnRate || 11}%):`, formatRupiah(ppn)) : ''}
-  <div class="row total"><span>TOTAL AKHIR:</span><span>${formatRupiah(t.totalAmount)}</span></div>
+  <div class="row total"><span>Total:</span><span>${formatRupiah(t.totalAmount)}</span></div>
   ${row('Metode Pembayaran:', t.paymentMethod)}
   ${row('Bayar:', formatRupiah(t.paymentAmount))}
   ${row('Kembalian:', formatRupiah(t.changeAmount))}

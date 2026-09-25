@@ -2,6 +2,8 @@ import React, { useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatRupiah, formatDateTime, formatCashierName, isPpnTransaction } from '../utils/formatters';
 import { buildReceiptHtml } from '../utils/receiptHtml';
+import { normalizePrinterSettings } from '../utils/printerSettings';
+import { transactionItemReceiptQuantityLabel, transactionItemSalePrice } from '../utils/unitConversion';
 import { Printer, X, CheckCircle, Stethoscope, User, ShoppingBag } from 'lucide-react';
 
 export const ReceiptModal: React.FC = () => {
@@ -20,11 +22,13 @@ export const ReceiptModal: React.FC = () => {
     if (didAutoPrint.current) return;
     didAutoPrint.current = true;
     const paperWidth = settings.paperWidth || '58mm';
+    const printerSettings = normalizePrinterSettings(settings, paperWidth);
     window.electronAPI
       .printReceipt({
         html: buildReceiptHtml({ transaction: lastTransaction, settings, paperWidth }),
         paperWidth,
         printerName: settings.printerName || undefined,
+        printerSettings,
       })
       .catch(() => {
         /* printing failures must never block the receipt modal */
@@ -33,19 +37,34 @@ export const ReceiptModal: React.FC = () => {
 
   if (!isReceiptModalOpen || !lastTransaction) return null;
 
+  const paperWidth = settings.paperWidth || '58mm';
+  const printerSettings = normalizePrinterSettings(settings, paperWidth);
   const handlePrint = () => {
     if (window.electronAPI) {
-      const paperWidth = settings.paperWidth || '58mm';
       window.electronAPI.printReceipt({
         html: buildReceiptHtml({ transaction: lastTransaction, settings, paperWidth }),
         paperWidth,
         printerName: settings.printerName || undefined,
+        printerSettings,
       });
     } else {
       // Web mode: keep the original browser print behaviour
       window.print();
     }
   };
+
+  const receiptStyle = {
+    '--receipt-width': paperWidth,
+    '--receipt-margin-top': `${printerSettings.marginTopMm}mm`,
+    '--receipt-margin-right': `${printerSettings.marginRightMm}mm`,
+    '--receipt-margin-bottom': `${printerSettings.marginBottomMm}mm`,
+    '--receipt-margin-left': `${printerSettings.marginLeftMm}mm`,
+    '--receipt-font-size': `${printerSettings.fontSize}pt`,
+    '--receipt-line-height': printerSettings.lineHeight,
+    '--receipt-label-width': `${printerSettings.labelWidthPct}%`,
+    '--receipt-column-gap': `${printerSettings.columnGapMm}mm`,
+    '--receipt-amount-align': printerSettings.amountAlignment,
+  } as React.CSSProperties;
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
@@ -72,6 +91,7 @@ export const ReceiptModal: React.FC = () => {
           <div className="p-6 bg-slate-50 flex-1 overflow-y-auto min-h-0">
           <div
             id="printable-receipt"
+            style={receiptStyle}
             className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm font-mono text-xs text-slate-800 space-y-4 max-w-[320px] mx-auto"
           >
             {/* Pharmacy Header */}
@@ -97,30 +117,29 @@ export const ReceiptModal: React.FC = () => {
 
             {/* Transaction Metadata */}
             <div className="space-y-1 text-[11px] pb-3 border-b border-dashed border-slate-300">
-              <div className="flex justify-between">
+              <div className="flex justify-between receipt-meta">
                 <span className="text-slate-500">No Trx:</span>
                 <span className="font-semibold text-slate-900">{lastTransaction.trxNo}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between receipt-meta">
                 <span className="text-slate-500">Tanggal:</span>
                 <span>{formatDateTime(lastTransaction.date)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between receipt-meta">
                 <span className="text-slate-500">Kasir:</span>
                 <span>{formatCashierName(lastTransaction.cashierName)}</span>
               </div>
 
               {lastTransaction.customerName && (
-                <div className="flex justify-between text-emerald-700 font-medium">
+                <div className="flex justify-between receipt-meta text-emerald-700 font-medium">
                   <span className="text-slate-500">Customer:</span>
                   <span>
-                    {lastTransaction.customerName}{' '}
-                    {lastTransaction.customerMemberNo ? `(${lastTransaction.customerMemberNo})` : ''}
+                    {lastTransaction.customerName}
                   </span>
                 </div>
               )}
               {lastTransaction.isPrescription && lastTransaction.doctorName && (
-                <div className="flex justify-between text-indigo-700 font-medium pt-1 border-t border-slate-100 mt-1">
+                <div className="flex justify-between receipt-meta text-indigo-700 font-medium pt-1 border-t border-slate-100 mt-1">
                   <span className="text-slate-500">Dokter Resep:</span>
                   <span>{lastTransaction.doctorName}</span>
                 </div>
@@ -134,10 +153,6 @@ export const ReceiptModal: React.FC = () => {
 
             {/* Items List */}
             <div className="space-y-2 pb-3 border-b border-dashed border-slate-300">
-              <div className="flex justify-between font-bold text-[10px] text-slate-500 uppercase">
-                <span>Obat (Qty x Harga)</span>
-                <span>Subtotal</span>
-              </div>
               {lastTransaction.items.map((item, idx) => (
                 <div key={idx} className="space-y-0.5">
                   <div className="font-semibold text-slate-900 text-[11px]">
@@ -145,8 +160,7 @@ export const ReceiptModal: React.FC = () => {
                   </div>
                   <div className="flex justify-between text-[11px] text-slate-600">
                     <span>
-                      {item.qty} {item.unit}
-                      {(item.unit === 'Lusin' || (item.unitMultiplier && item.unitMultiplier > 1)) ? ` (${item.qty * (item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1))} pcs)` : ''} x {formatRupiah(item.price)}
+                      {transactionItemReceiptQuantityLabel(item)} @ {formatRupiah(transactionItemSalePrice(item))}
                     </span>
                     <span className="font-medium text-slate-900">{formatRupiah(item.subtotal)}</span>
                   </div>
@@ -176,7 +190,7 @@ export const ReceiptModal: React.FC = () => {
             {/* Calculations */}
             <div className="space-y-1.5 pt-1 text-[11px]">
               <div className="flex justify-between text-slate-700 font-semibold pb-1 border-b border-dashed border-slate-200">
-                <span>Subtotal Produk:</span>
+                <span>Subtotal:</span>
                 <span className="font-bold text-slate-900">
                   {formatRupiah(lastTransaction.items.reduce((sum, item) => sum + item.subtotal, 0))}
                 </span>
@@ -196,7 +210,7 @@ export const ReceiptModal: React.FC = () => {
               {isPpnTransaction(lastTransaction) && (
                 <div className="space-y-1 pb-1.5 border-b border-dashed border-slate-200">
                   <div className="flex justify-between text-slate-600">
-                    <span>DPP (Nilai Bersih):</span>
+                    <span>DPP:</span>
                     <span>{formatRupiah(lastTransaction.dppAmount ?? Math.round(lastTransaction.totalAmount / 1.11))}</span>
                   </div>
                   <div className="flex justify-between text-blue-800 font-semibold">
@@ -205,9 +219,9 @@ export const ReceiptModal: React.FC = () => {
                   </div>
                 </div>
               )}
-              <div className="flex justify-between text-slate-700 font-bold text-xs pt-1">
-                <span>TOTAL AKHIR:</span>
-                <span className="text-emerald-700 font-bold text-sm">
+              <div className="flex justify-between text-slate-700 font-bold text-[11px] pt-1">
+                <span>Total:</span>
+                <span className="text-emerald-700 font-bold">
                   {formatRupiah(lastTransaction.totalAmount)}
                 </span>
               </div>

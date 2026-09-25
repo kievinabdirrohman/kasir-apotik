@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { ActiveTab } from '../types';
+import { InlineNotice } from './InlineNotice';
 import logoImg from '../assets/logo.png';
 import {
   LayoutDashboard,
@@ -36,6 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     expiredCount,
     expiring30Count,
   } = useApp();
+  const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
 
   const totalUrgentAlerts = lowStockCount + expiredCount + expiring30Count;
 
@@ -148,6 +150,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
 
         {/* Navigation Menu */}
         <nav className="flex-1 px-3 overflow-y-auto py-2">
+          {permissionMessage && (
+            <InlineNotice
+              message={permissionMessage}
+              tone="info"
+              onDismiss={() => setPermissionMessage(null)}
+              className="mb-3"
+            />
+          )}
           {navGroups.map((group, index) => (
             <div key={group.label} className={index > 0 ? 'mt-4' : ''}>
               <div className="px-3 mb-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
@@ -164,12 +174,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
                       key={item.id}
                       onClick={() => {
                         if (isRestricted) {
-                          alert('Menu ini khusus untuk hak akses Admin. Silakan hubungi Admin Utama jika Anda memerlukan akses.');
+                          setPermissionMessage('Menu ini khusus untuk hak akses Admin. Silakan hubungi Admin Utama jika Anda memerlukan akses.');
                           return;
                         }
                         handleSelectTab(item.id);
                       }}
-                      disabled={isRestricted}
+                      aria-disabled={isRestricted}
                       className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-medium transition-all group ${
                         isActive
                           ? 'bg-emerald-600 text-white font-bold shadow-md shadow-emerald-950'

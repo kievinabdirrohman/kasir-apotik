@@ -1,6 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { formatRupiah, formatDate, formatDateTime, getDaysUntilExpired, getExpiredStatus, getWIBDateString, isPpnTransaction, getItemIsPpn, formatStockDisplay } from '../utils/formatters';
+import logoImg from '../assets/logo.png';
+import { ReportExportActions } from '../components/ReportExportActions';
+import { InlineNotice } from '../components/InlineNotice';
+import { formatRupiah, formatDate, formatDateTime, formatTransactionCustomer, getDaysUntilExpired, getExpiredStatus, getWIBDateString, isPpnTransaction, getItemIsPpn, formatStockDisplay } from '../utils/formatters';
+import { medicineBaseUnitName, transactionItemBaseDisplayLabel, transactionItemBaseQuantity, transactionItemCost, transactionItemDisplayLabel, transactionItemPackageLabel, transactionItemPriceTypeLabel, transactionItemSalePrice } from '../utils/unitConversion';
+import { buildAuditExportModel, loadAuditFilterState, updateAuditFilterState, type AuditBookDateRange, type AuditExportScope } from '../utils/reportExport';
+import { downloadAuditPdf } from '../utils/reportPdf';
 import {
   FileSpreadsheet,
   Printer,
@@ -24,7 +30,6 @@ import {
   CreditCard,
   ChevronRight,
   Package,
-  Download,
 } from 'lucide-react';
 
 const PaginationControls = ({ currentPage, totalPages, onPageChange, totalItems, itemsPerPage }: { currentPage: number, totalPages: number, onPageChange: (p: number) => void, totalItems: number, itemsPerPage: number }) => {
@@ -70,12 +75,37 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
     doctors,
     medicines,
     stockHistory,
+    cashFlows,
+    settings,
+    currentUser,
     setActiveTab,
     setLastTransaction,
     setIsReceiptModalOpen,
   } = useApp();
 
   const todayStr = getWIBDateString();
+  const savedAuditFilters = loadAuditFilterState();
+
+  const uniqueLabels = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
+  const getTransactionPriceTypeLabels = (transaction: (typeof transactions)[number]) => uniqueLabels(
+    transaction.items.map(item => transactionItemPriceTypeLabel(
+      item,
+      medicines.find(m => m.id === item.medicineId || m.name === item.medicineName),
+    )),
+  );
+  const getMedicineTransactions = (medicine: (typeof medicines)[number]) => transactions.filter(
+    transaction => transaction.status === 'Selesai' && transaction.items.some(
+      item => item.medicineId === medicine.id || item.medicineName === medicine.name,
+    ),
+  );
+  const getMedicineCustomerLabels = (medicine: (typeof medicines)[number]) => uniqueLabels(
+    getMedicineTransactions(medicine).map(formatTransactionCustomer),
+  );
+  const getMedicinePriceTypeLabels = (medicine: (typeof medicines)[number]) => uniqueLabels(
+    getMedicineTransactions(medicine).flatMap(transaction => transaction.items
+      .filter(item => item.medicineId === medicine.id || item.medicineName === medicine.name)
+      .map(item => transactionItemPriceTypeLabel(item, medicine))),
+  );
 
   const [activeReportTab, setActiveReportTab] = useState<ReportTabType>(initialTab);
 
@@ -85,31 +115,33 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
     }
   }, [initialTab]);
 
-  const [taxReportFilter, setTaxReportFilter] = useState<'all' | 'PPN' | 'NON_PPN'>('all');
+  const [taxReportFilter, setTaxReportFilter] = useState<'all' | 'PPN' | 'NON_PPN'>(savedAuditFilters.reports.taxReportFilter as 'all' | 'PPN' | 'NON_PPN');
 
   // Penjualan Filter Date & Controls (Default: Hari ini / 1_day)
-  const [salesPreset, setSalesPreset] = useState<string>('1_day');
-  const [startDate, setStartDate] = useState(todayStr);
-  const [endDate, setEndDate] = useState(todayStr);
+  const [salesPreset, setSalesPreset] = useState<string>(savedAuditFilters.reports.salesPreset);
+  const [startDate, setStartDate] = useState(savedAuditFilters.reports.startDate || todayStr);
+  const [endDate, setEndDate] = useState(savedAuditFilters.reports.endDate || todayStr);
 
   // Advance Filter Controls for Reports
-  const [methodFilter, setMethodFilter] = useState<string>('all');
-  const [prescriptionFilter, setPrescriptionFilter] = useState<string>('all');
-  const [cashierFilter, setCashierFilter] = useState<string>('all');
-  const [doctorFilter, setDoctorFilter] = useState<string>('all');
-  const [customerFilter, setCustomerFilter] = useState<string>('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [methodFilter, setMethodFilter] = useState<string>(savedAuditFilters.reports.methodFilter);
+  const [prescriptionFilter, setPrescriptionFilter] = useState<string>(savedAuditFilters.reports.prescriptionFilter);
+  const [cashierFilter, setCashierFilter] = useState<string>(savedAuditFilters.reports.cashierFilter);
+  const [doctorFilter, setDoctorFilter] = useState<string>(savedAuditFilters.reports.doctorFilter);
+  const [customerFilter, setCustomerFilter] = useState<string>(savedAuditFilters.reports.customerFilter);
+  const [categoryFilter, setCategoryFilter] = useState<string>(savedAuditFilters.reports.categoryFilter);
   const [showAdvanceFilters, setShowAdvanceFilters] = useState<boolean>(false);
   const [salesSubView, setSalesSubView] = useState<'trx' | 'items'>('trx');
 
   // Search & Filter State for Operational Report Tabs
-  const [searchPenjualan, setSearchPenjualan] = useState('');
-  const [searchCustomer, setSearchCustomer] = useState('');
+  const [searchPenjualan, setSearchPenjualan] = useState(savedAuditFilters.reports.searchPenjualan);
+  const [searchCustomer, setSearchCustomer] = useState(savedAuditFilters.reports.searchCustomer);
   const [selectedCustomerDetail, setSelectedCustomerDetail] = useState<any | null>(null);
-  const [searchDokter, setSearchDokter] = useState('');
+  const [searchDokter, setSearchDokter] = useState(savedAuditFilters.reports.searchDokter);
   const [selectedDoctorDetail, setSelectedDoctorDetail] = useState<any | null>(null);
-  const [searchStok, setSearchStok] = useState('');
-  const [searchExpired, setSearchExpired] = useState('');
+  const [searchStok, setSearchStok] = useState(savedAuditFilters.reports.searchStok);
+  const [searchExpired, setSearchExpired] = useState(savedAuditFilters.reports.searchExpired);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [selectedTrxDetail, setSelectedTrxDetail] = useState<any | null>(null);
   const [selectedMedicineDetail, setSelectedMedicineDetail] = useState<any | null>(null);
   const [selectedExpiredDetail, setSelectedExpiredDetail] = useState<any | null>(null);
@@ -256,6 +288,57 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
     setSearchPenjualan('');
   };
 
+  const reportFilterSnapshot = () => ({
+    activeTab: activeReportTab,
+    salesPreset,
+    startDate,
+    endDate,
+    methodFilter,
+    prescriptionFilter,
+    cashierFilter,
+    doctorFilter,
+    customerFilter,
+    categoryFilter,
+    taxReportFilter,
+    searchPenjualan,
+    searchCustomer,
+    searchDokter,
+    searchStok,
+    searchExpired,
+  });
+
+  useEffect(() => {
+    updateAuditFilterState({ reports: reportFilterSnapshot() });
+  }, [activeReportTab, salesPreset, startDate, endDate, methodFilter, prescriptionFilter, cashierFilter, doctorFilter, customerFilter, categoryFilter, taxReportFilter, searchPenjualan, searchCustomer, searchDokter, searchStok, searchExpired]);
+
+  const handleAuditExport = async (scope: Extract<AuditExportScope, 'reports' | 'audit-book'>, auditBookDateRange?: AuditBookDateRange) => {
+    setExportError(null);
+    setIsExporting(true);
+    try {
+      const filters = updateAuditFilterState({ reports: reportFilterSnapshot() });
+      const model = buildAuditExportModel({
+        scope,
+        auditBookDateRange,
+        reportTab: activeReportTab,
+        settings,
+        currentUser: currentUser || { name: 'Sistem', username: 'sistem', role: 'admin' },
+        transactions,
+        customers,
+        doctors,
+        medicines,
+        stockHistory,
+        cashFlows,
+        filters,
+      });
+      await downloadAuditPdf(model, logoImg);
+    } catch (error) {
+      console.error('Gagal membuat PDF laporan:', error);
+      setExportError('Export PDF gagal. Silakan coba lagi.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
 
 
   // Options for Dropdowns
@@ -325,7 +408,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
 
   const totalSalesAmount = filteredSalesTransactions.reduce((sum, t) => sum + t.totalAmount, 0);
   const totalItemsSold = filteredSalesTransactions.reduce(
-    (sum, t) => sum + t.items.reduce((iSum, item) => iSum + item.qty, 0),
+    (sum, t) => sum + t.items.reduce((iSum, item) => iSum + transactionItemBaseQuantity(item), 0),
     0
   );
   const totalCommission = filteredSalesTransactions.reduce(
@@ -362,7 +445,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
   // Product sales breakdown aggregation (with category filter applied if selected)
   const productSalesMap = new Map<
     string,
-    { code: string; name: string; unit: string; totalQty: number; totalRevenue: number; transactionCount: number }
+    { code: string; name: string; unit: string; packageLabel: string; displayLabel: string; baseQuantity: number; baseUnit: string; totalQty: number; totalRevenue: number; transactionCount: number; customerLabels: string[]; priceTypeLabels: string[]; noBatch?: string }
   >();
 
   filteredSalesTransactions.forEach(t => {
@@ -376,18 +459,42 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
         return;
       }
 
-      const key = item.medicineId || item.medicineCode || item.medicineName;
+      // Keep different package/snapshot prices separate. Otherwise a Box and a
+      // Strip sale would be merged and the first item's unit would lie.
+      const key = [
+        item.medicineId || item.medicineCode || item.medicineName,
+        item.unitId || item.unit,
+        item.pricingMode || 'legacy',
+        item.customPriceId || '',
+        item.customQuantity || 1,
+        item.customUnit || item.unit,
+        item.priceSource || 'normal',
+        item.customerId || '',
+        transactionItemSalePrice(item),
+      ].join('|');
       const existing = productSalesMap.get(key) || {
         code: item.medicineCode || '-',
         name: item.medicineName,
         unit: item.unit,
+        packageLabel: transactionItemPackageLabel(item),
+        displayLabel: transactionItemDisplayLabel(item),
+        baseQuantity: 0,
+        baseUnit: medicineBaseUnitName(matchedMed),
         totalQty: 0,
         totalRevenue: 0,
         transactionCount: 0,
+        customerLabels: [],
+        priceTypeLabels: [],
+        noBatch: undefined,
       };
       existing.totalQty += item.qty;
+      existing.displayLabel = transactionItemDisplayLabel({ ...item, qty: existing.totalQty });
+      existing.baseQuantity += transactionItemBaseQuantity(item);
       existing.totalRevenue += item.subtotal;
       existing.transactionCount += 1;
+      existing.customerLabels = uniqueLabels([...existing.customerLabels, formatTransactionCustomer(t)]);
+      existing.priceTypeLabels = uniqueLabels([...existing.priceTypeLabels, transactionItemPriceTypeLabel(item, matchedMed)]);
+      if (!existing.noBatch) existing.noBatch = item.noBatch;
       productSalesMap.set(key, existing);
     });
   });
@@ -402,7 +509,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
     return (
       p.code.toLowerCase().includes(q) ||
       p.name.toLowerCase().includes(q) ||
-      p.unit.toLowerCase().includes(q)
+      p.unit.toLowerCase().includes(q) ||
+      p.packageLabel.toLowerCase().includes(q)
     );
   });
 
@@ -549,10 +657,22 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
           <p className="text-xs text-slate-500 mt-1">
             {isTaxMode
               ? 'Rekapitulasi Faktur Penjualan PPN 11% & Nota Non-PPN, Dasar Pengenaan Pajak (DPP), dan rincian PPN per item.'
-              : 'Rekapitulasi penjualan, analisis pelanggan, rujukan dokter, status stok, dan audit kadaluwarsa.'}
+            : 'Rekapitulasi penjualan, analisis pelanggan, rujukan dokter, status stok, dan audit kadaluwarsa.'}
           </p>
         </div>
+        <ReportExportActions
+          onExport={() => handleAuditExport('reports')}
+          onAuditBook={range => handleAuditExport('audit-book', range)}
+          isExporting={isExporting}
+        />
       </div>
+
+      {exportError && (
+        <InlineNotice
+          message={exportError}
+          onDismiss={() => setExportError(null)}
+        />
+      )}
 
       {/* Main Report Category Tabs */}
       <div className="flex border-b border-slate-200 gap-2 sm:gap-5 text-xs font-bold overflow-x-auto scrollbar-none">
@@ -986,8 +1106,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               </span>
             </div>
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs col-span-2 lg:col-span-1">
-              <span className="text-xs text-slate-500 block font-medium">Unit Obat Terjual</span>
-              <span className="text-xl sm:text-2xl font-black text-blue-700">{totalItemsSold} Item</span>
+              <span className="text-xs text-slate-500 block font-medium">Total unit terkecil terjual</span>
+              <span className="text-xl sm:text-2xl font-black text-blue-700">{totalItemsSold} unit</span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Gabungan hasil konversi seluruh unit transaksi ke unit dengan multiplier 1.</span>
             </div>
           </div>
 
@@ -1079,7 +1200,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                         <div className="grid grid-cols-2 gap-1 text-[11px] text-slate-500">
                           <span>Waktu: {formatDateTime(t.date)}</span>
                           <span className="text-right">Metode: <strong className="text-slate-800">{t.paymentMethod}</strong></span>
-                          <span>Customer: <strong className="text-slate-800">{t.customerName || 'Umum'}</strong></span>
+                          <span>Customer: <strong className="text-slate-800">{formatTransactionCustomer(t)}</strong></span>
+                          <span>Jenis harga: <strong className="text-slate-800">{getTransactionPriceTypeLabels(t).join(', ') || '-'}</strong></span>
                           <span className="text-right">Dokter: <strong className="text-indigo-700">{t.doctorName || '-'}</strong></span>
                         </div>
                         <div className="flex items-center justify-end gap-1.5 pt-1.5 border-t border-slate-100">
@@ -1114,6 +1236,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       <th className="py-3 px-4">Waktu</th>
                       <th className="py-3 px-4">Jenis & Persentase Resep</th>
                       <th className="py-3 px-4">Customer</th>
+                      <th className="py-3 px-4">Jenis Harga</th>
                       <th className="py-3 px-4">Dokter</th>
                       <th className="py-3 px-4">Metode</th>
                       <th className="py-3 px-4 text-center">Status Perpajakan</th>
@@ -1124,7 +1247,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   <tbody className="divide-y divide-slate-100">
                     {paginatedSalesTransactions.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="py-8 text-center text-slate-400">
+                        <td colSpan={10} className="py-8 text-center text-slate-400">
                           Tidak ada data transaksi penjualan pada periode ini.
                         </td>
                       </tr>
@@ -1147,7 +1270,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                                 </span>
                               )}
                             </td>
-                            <td className="py-2.5 px-4 font-semibold text-slate-800">{t.customerName || 'Umum'}</td>
+                            <td className="py-2.5 px-4 font-semibold text-slate-800">{formatTransactionCustomer(t)}</td>
+                            <td className="py-2.5 px-4 text-slate-600 max-w-xs">{getTransactionPriceTypeLabels(t).join(', ') || '-'}</td>
                             <td className="py-2.5 px-4 text-indigo-700 font-semibold">{t.doctorName || '-'}</td>
                             <td className="py-2.5 px-4 text-slate-600">{t.paymentMethod}</td>
                             <td className="py-2.5 px-4 text-center">
@@ -1189,7 +1313,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   {filteredSalesTransactions.length > 0 && (
                     <tfoot>
                       <tr className="bg-slate-100 font-bold border-t-2 border-slate-300 text-xs text-slate-900">
-                        <td colSpan={7} className="py-3 px-4 text-right uppercase tracking-wider">Total Omset Penjualan Terfilter:</td>
+                        <td colSpan={8} className="py-3 px-4 text-right uppercase tracking-wider">Total Omset Penjualan Terfilter:</td>
                         <td className="py-3 px-4 text-right text-emerald-800 font-black text-sm">{formatRupiah(totalSalesAmount)}</td>
                         <td></td>
                       </tr>
@@ -1225,13 +1349,17 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                           <div>
                             <span className="font-mono text-slate-400 text-[10px] block">{p.code}</span>
                             <h5 className="font-bold text-slate-900">{p.name}</h5>
+                            {p.noBatch && (
+                              <span className="text-[10px] text-slate-400 block">Batch: {p.noBatch}</span>
+                            )}
                           </div>
                           <span className="font-extrabold text-emerald-700 text-sm">{formatRupiah(p.totalRevenue)}</span>
                         </div>
                         <div className="grid grid-cols-3 gap-1 text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100">
                           <div>
                             <span className="text-slate-400 block text-[10px]">Terjual:</span>
-                            <strong className="text-blue-700">{p.totalQty} {p.unit}</strong>
+                            <strong className="text-blue-700 block">{p.displayLabel}</strong>
+                            <span className="text-[10px] text-slate-500 block">Stok dasar: {p.baseQuantity} {p.baseUnit}</span>
                           </div>
                           <div>
                             <span className="text-slate-400 block text-[10px]">Frekuensi:</span>
@@ -1241,6 +1369,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                             <span className="text-slate-400 block text-[10px]">Kontribusi:</span>
                             <strong className="text-slate-800">{share}%</strong>
                           </div>
+                        </div>
+                        <div className="space-y-0.5 text-[10px] text-slate-500">
+                          <div>Customer: <strong className="text-slate-800">{p.customerLabels.join(', ') || '-'}</strong></div>
+                          <div>Jenis harga: <strong className="text-slate-800">{p.priceTypeLabels.join(', ') || '-'}</strong></div>
                         </div>
                         <div className="flex justify-end pt-1">
                           <button
@@ -1266,6 +1398,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                     <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                       <th className="py-3 px-4">Kode / Nama Obat</th>
                       <th className="py-3 px-4">Kemasan</th>
+                      <th className="py-3 px-4">Customer</th>
+                      <th className="py-3 px-4">Jenis Harga</th>
+                      <th className="py-3 px-4">No. Batch</th>
                       <th className="py-3 px-4 text-center">Total Qty Terjual</th>
                       <th className="py-3 px-4 text-center">Frekuensi Transaksi</th>
                       <th className="py-3 px-4 text-right">Total Omset (Rp)</th>
@@ -1276,7 +1411,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   <tbody className="divide-y divide-slate-100">
                     {paginatedProductSalesList.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-8 text-center text-slate-400">
+                        <td colSpan={10} className="py-8 text-center text-slate-400">
                           Tidak ada item obat yang sesuai dengan pencarian / periode ini.
                         </td>
                       </tr>
@@ -1289,9 +1424,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                               <span className="font-mono text-slate-400 block text-[10px]">{p.code}</span>
                               <span className="font-bold text-slate-900">{p.name}</span>
                             </td>
-                            <td className="py-2.5 px-4 text-slate-600">{p.unit}</td>
+                            <td className="py-2.5 px-4 text-slate-600">{p.packageLabel}</td>
+                            <td className="py-2.5 px-4 text-slate-700 max-w-xs">{p.customerLabels.join(', ') || '-'}</td>
+                            <td className="py-2.5 px-4 text-slate-700 max-w-xs">{p.priceTypeLabels.join(', ') || '-'}</td>
+                            <td className="py-2.5 px-4 text-slate-500">{p.noBatch || '-'}</td>
                             <td className="py-2.5 px-4 text-center font-bold text-blue-700">
-                              {p.totalQty} {p.unit}
+                              <span className="block">{p.displayLabel}</span>
+                              <span className="block text-[10px] text-slate-500">Stok dasar: {p.baseQuantity} {p.baseUnit}</span>
                             </td>
                             <td className="py-2.5 px-4 text-center text-slate-700 font-semibold">
                               {p.transactionCount} x
@@ -1415,7 +1554,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                         <div>
                           <span className="font-mono font-bold text-emerald-700 text-[11px] block">{cust.memberNo}</span>
                           <h5 className="font-bold text-slate-900 text-sm">{cust.name}</h5>
-                          <span className="text-[11px] text-slate-500 block">No HP: {cust.phone}</span>
+                           <span className="text-[11px] text-slate-500 block">No HP: {cust.phone}</span>
+                           <span className="text-[10px] text-slate-500 block">Jenis harga: <strong className="text-slate-800">{uniqueLabels(custTrxs.flatMap(getTransactionPriceTypeLabels)).join(', ') || '-'}</strong></span>
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] text-slate-400 uppercase font-bold block">Total Pembelian</span>
@@ -1472,7 +1612,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                           <td className="py-3 px-4 font-mono font-bold text-emerald-700">{cust.memberNo}</td>
                           <td className="py-3 px-4">
                             <span className="font-bold text-slate-900 block">{cust.name}</span>
-                            {cust.address && <span className="text-[10px] text-slate-400 block">{cust.address}</span>}
+                             {cust.address && <span className="text-[10px] text-slate-400 block">{cust.address}</span>}
+                             <span className="text-[10px] text-slate-500 block">Jenis harga: <strong className="text-slate-800">{uniqueLabels(custTrxs.flatMap(getTransactionPriceTypeLabels)).join(', ') || '-'}</strong></span>
                           </td>
                           <td className="py-3 px-4 text-slate-600 font-medium">{cust.phone}</td>
                           <td className="py-3 px-4 text-center font-bold text-slate-800">
@@ -1638,14 +1779,24 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                                   Dokter: {t.doctorName}
                                 </div>
                               )}
+                              <div className="text-[10px] text-emerald-700 font-medium">
+                                Customer: {formatTransactionCustomer(t)}
+                              </div>
                             </td>
                             <td className="py-3 px-3 align-top">
                               <div className="space-y-1">
                                 {t.items.map((item, idx) => (
                                   <div key={idx} className="flex items-center justify-between text-[11px] bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                                    <span className="font-semibold text-slate-800">{item.medicineName}</span>
+                                    <span className="font-semibold text-slate-800">
+                                      {item.medicineName}
+                                      {item.noBatch && (
+                                        <span className="block text-[10px] font-normal text-slate-400">Batch: {item.noBatch}</span>
+                                      )}
+                                    </span>
                                     <span className="font-mono text-slate-600 text-[10px]">
-                                      {item.qty} {item.unit} x {formatRupiah(item.price)} = <strong>{formatRupiah(item.subtotal)}</strong>
+                                      {transactionItemDisplayLabel(item)} @ {formatRupiah(transactionItemSalePrice(item))} = <strong>{formatRupiah(item.subtotal)}</strong>
+                                      <span className="block text-[9px] text-slate-400">{transactionItemBaseDisplayLabel(item, medicines.find(m => m.id === item.medicineId || m.name === item.medicineName))}</span>
+                                      <span className="block text-[9px] text-indigo-600">{transactionItemPriceTypeLabel(item, medicines.find(m => m.id === item.medicineId || m.name === item.medicineName))}</span>
                                     </span>
                                   </div>
                                 ))}
@@ -1817,7 +1968,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                             </td>
                             <td className="py-3 px-3 align-top">
                               <div className="font-semibold text-slate-800">
-                                {t.customerName || (t.customerId ? 'Member' : 'Pelanggan Umum')}
+                                {formatTransactionCustomer(t)}
                               </div>
                               {t.customerMemberNo && (
                                 <span className="font-mono text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 inline-block mt-0.5">
@@ -1837,9 +1988,16 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                               <div className="space-y-1">
                                 {t.items.map((item, idx) => (
                                   <div key={idx} className="flex items-center justify-between text-[11px] bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                                    <span className="font-semibold text-slate-800">{item.medicineName}</span>
+                                    <span className="font-semibold text-slate-800">
+                                      {item.medicineName}
+                                      {item.noBatch && (
+                                        <span className="block text-[10px] font-normal text-slate-400">Batch: {item.noBatch}</span>
+                                      )}
+                                    </span>
                                     <span className="font-mono text-slate-600 text-[10px]">
-                                      {item.qty} {item.unit} x {formatRupiah(item.price)} = <strong>{formatRupiah(item.subtotal)}</strong>
+                                      {transactionItemDisplayLabel(item)} @ {formatRupiah(transactionItemSalePrice(item))} = <strong>{formatRupiah(item.subtotal)}</strong>
+                                      <span className="block text-[9px] text-slate-400">{transactionItemBaseDisplayLabel(item, medicines.find(m => m.id === item.medicineId || m.name === item.medicineName))}</span>
+                                      <span className="block text-[9px] text-indigo-600">{transactionItemPriceTypeLabel(item, medicines.find(m => m.id === item.medicineId || m.name === item.medicineName))}</span>
                                     </span>
                                   </div>
                                 ))}
@@ -1961,6 +2119,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                         <div>
                           <h5 className="font-bold text-slate-900">{doc.name}</h5>
                           <span className="text-[11px] text-slate-500">HP: {doc.phone || '-'}</span>
+                          <span className="text-[10px] text-slate-500 block">Jenis harga: <strong className="text-slate-800">{uniqueLabels(docTrxs.flatMap(getTransactionPriceTypeLabels)).join(', ') || '-'}</strong></span>
                         </div>
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -2026,6 +2185,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                           <td className="py-2.5 px-4">
                             <div className="font-bold text-slate-900">{doc.name}</div>
                             <div className="text-[11px] text-slate-500">HP: {doc.phone || '-'}</div>
+                            <div className="text-[10px] text-slate-500">Jenis harga: <strong className="text-slate-800">{uniqueLabels(docTrxs.flatMap(getTransactionPriceTypeLabels)).join(', ') || '-'}</strong></div>
                           </td>
                           <td className="py-2.5 px-4">
                             <span
@@ -2112,8 +2272,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       </div>
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-slate-500">Kategori: <strong>{m.category}</strong></span>
-                        <span className="font-bold text-slate-900">Stok: {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)} (Min: {m.minStock})</span>
+                        <span className="font-bold text-slate-900">Stok: {formatStockDisplay(m.stock, m.unit, m.unitMultiplier, m.units)} (Min: {m.minStock})</span>
                       </div>
+                      <div className="text-[10px] text-slate-500 space-y-0.5">
+                        <div>Customer: <strong className="text-slate-800">{getMedicineCustomerLabels(m).join(', ') || '-'}</strong></div>
+                        <div>Jenis harga: <strong className="text-slate-800">{getMedicinePriceTypeLabels(m).join(', ') || '-'}</strong></div>
+                      </div>
+                      {m.noBatch && (
+                        <div className="text-[10px] text-slate-500">Batch: {m.noBatch}</div>
+                      )}
                       <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
                         <span className="font-extrabold text-emerald-700">Harga: {formatRupiah(m.price)}</span>
                         <button
@@ -2136,6 +2303,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-4">Kode / Nama Obat</th>
                     <th className="py-3 px-4">Kategori</th>
+                    <th className="py-3 px-4">No. Batch</th>
                     <th className="py-3 px-4">Stok Fisik</th>
                     <th className="py-3 px-4">Batas Min</th>
                     <th className="py-3 px-4">Status Stok</th>
@@ -2146,7 +2314,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                 <tbody className="divide-y divide-slate-100">
                   {paginatedReportMedicines.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-400">
+                      <td colSpan={8} className="py-8 text-center text-slate-400">
                         Tidak ada data stok obat yang sesuai dengan pencarian.
                       </td>
                     </tr>
@@ -2160,8 +2328,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                             <span className="font-bold text-slate-900">{m.name}</span>
                           </td>
                           <td className="py-2.5 px-4 text-slate-600">{m.category}</td>
+                          <td className="py-2.5 px-4 text-slate-500">{m.noBatch || '-'}</td>
                           <td className="py-2.5 px-4 font-mono font-bold text-slate-900">
-                            {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}
+                            {formatStockDisplay(m.stock, m.unit, m.unitMultiplier, m.units)}
                           </td>
                           <td className="py-2.5 px-4 font-mono text-slate-500">{m.minStock} {m.unit}</td>
                           <td className="py-2.5 px-4">
@@ -2173,7 +2342,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                               {isLow ? 'STOK MENIPIS' : 'AMAN'}
                             </span>
                           </td>
-                          <td className="py-2.5 px-4 text-right font-bold text-emerald-700">{formatRupiah(m.price)}</td>
+                          <td className="py-2.5 px-4 text-right font-bold text-emerald-700">
+                            {formatRupiah(m.price)}
+                            <span className="block text-left text-[10px] text-slate-500 font-normal mt-1">Customer: <strong className="text-slate-700">{getMedicineCustomerLabels(m).join(', ') || '-'}</strong></span>
+                            <span className="block text-left text-[10px] text-slate-500 font-normal">Jenis harga: <strong className="text-slate-700">{getMedicinePriceTypeLabels(m).join(', ') || '-'}</strong></span>
+                          </td>
                           <td className="py-2.5 px-4 text-center">
                             <button
                               onClick={() => setSelectedMedicineDetail(m)}
@@ -2261,8 +2434,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-slate-600">
                         <span>Exp: <strong>{formatDate(m.expiredDate)}</strong></span>
-                        <span>Stok: <strong>{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</strong></span>
+                        <span>Stok: <strong>{formatStockDisplay(m.stock, m.unit, m.unitMultiplier, m.units)}</strong></span>
                       </div>
+                      <div className="text-[10px] text-slate-500 space-y-0.5">
+                        <div>Customer: <strong className="text-slate-800">{getMedicineCustomerLabels(m).join(', ') || '-'}</strong></div>
+                        <div>Jenis harga: <strong className="text-slate-800">{getMedicinePriceTypeLabels(m).join(', ') || '-'}</strong></div>
+                      </div>
+                      {m.noBatch && (
+                        <div className="text-[10px] text-slate-500">Batch: {m.noBatch}</div>
+                      )}
                       <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
                         <span className="font-extrabold text-slate-800">Nilai: {formatRupiah(m.stock * m.price)}</span>
                         <button
@@ -2284,6 +2464,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                 <thead>
                   <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-4">Kode / Nama Obat</th>
+                    <th className="py-3 px-4">No. Batch</th>
                     <th className="py-3 px-4">Tanggal Expired</th>
                     <th className="py-3 px-4">Status & Sisa Hari</th>
                     <th className="py-3 px-4">Stok Saat Ini</th>
@@ -2294,7 +2475,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                 <tbody className="divide-y divide-slate-100">
                   {paginatedExpiredItemsList.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-400">
+                      <td colSpan={7} className="py-8 text-center text-slate-400">
                         Tidak ada data expired yang sesuai dengan pencarian.
                       </td>
                     </tr>
@@ -2307,14 +2488,19 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                             <span className="font-mono text-slate-400 block text-[10px]">{m.code}</span>
                             <span className="font-bold text-slate-900">{m.name}</span>
                           </td>
+                          <td className="py-2.5 px-4 text-slate-500">{m.noBatch || '-'}</td>
                           <td className="py-2.5 px-4 font-semibold text-slate-800">{formatDate(m.expiredDate)}</td>
                           <td className="py-2.5 px-4">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${statusInfo.badgeColor}`}>
                               {statusInfo.label}
                             </span>
                           </td>
-                          <td className="py-2.5 px-4 font-bold text-slate-900">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</td>
-                          <td className="py-2.5 px-4 text-right font-extrabold text-slate-800">{formatRupiah(m.stock * m.price)}</td>
+                          <td className="py-2.5 px-4 font-bold text-slate-900">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier, m.units)}</td>
+                          <td className="py-2.5 px-4 text-right font-extrabold text-slate-800">
+                            {formatRupiah(m.stock * m.price)}
+                            <span className="block text-left text-[10px] text-slate-500 font-normal mt-1">Customer: <strong className="text-slate-700">{getMedicineCustomerLabels(m).join(', ') || '-'}</strong></span>
+                            <span className="block text-left text-[10px] text-slate-500 font-normal">Jenis harga: <strong className="text-slate-700">{getMedicinePriceTypeLabels(m).join(', ') || '-'}</strong></span>
+                          </td>
                           <td className="py-2.5 px-4 text-center">
                             <button
                               onClick={() => setSelectedExpiredDetail(m)}
@@ -2356,15 +2542,21 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
         const obatItemsList: Array<{
           trxId: string;
           trxNo: string;
-          date: string;
-          customerName: string;
-          cashierName: string;
+           date: string;
+           customerName: string;
+           customerLabel: string;
+           priceTypeLabel: string;
+           cashierName: string;
           paymentMethod: string;
           medicineId: string;
           code: string;
           name: string;
           category: string;
           unit: string;
+          packageLabel: string;
+          displayLabel: string;
+          baseDisplayLabel: string;
+          unitMultiplier: number;
           qty: number;
           price: number;
           subtotal: number;
@@ -2375,6 +2567,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
           dpp: number;
           ppnVal: number;
           margin: number;
+          noBatch?: string;
         }> = [];
 
         basePeriodTrxs.forEach(t => {
@@ -2388,17 +2581,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
 
             const isPpn = getItemIsPpn(item, t, medInfo);
             const rate = item.ppnRate || t.ppnRate || 11;
-            const subtotal = item.subtotal || (item.price * item.qty);
+            const subtotal = item.subtotal ?? (transactionItemSalePrice(item) * item.qty);
             const dpp = isPpn ? Math.round(subtotal / (1 + rate / 100)) : subtotal;
             const ppnVal = isPpn ? (subtotal - dpp) : 0;
-            const masterMult = medInfo?.unit === 'Lusin' ? 12 : (medInfo?.unitMultiplier || 1);
-            const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
-            const rawPurchasePrice = item.purchasePrice ?? (medInfo?.purchasePrice || Math.round(item.price * 0.75));
-
-            const costPerPcs = masterMult > 1 ? rawPurchasePrice / masterMult : rawPurchasePrice;
-            const qtyPcs = item.qty * itemMult;
-            const costSubtotal = Math.round(costPerPcs * qtyPcs);
-            const hppPerUnit = item.qty > 0 ? Math.round(costSubtotal / item.qty) : costPerPcs;
+            const costSubtotal = transactionItemCost(item, medInfo);
+            const hppPerUnit = item.qty > 0 ? Math.round(costSubtotal / item.qty) : 0;
             const margin = subtotal - costSubtotal;
 
             obatItemsList.push({
@@ -2406,6 +2593,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               trxNo: t.trxNo,
               date: t.date,
               customerName: t.customerName || 'Customer Umum',
+              customerLabel: formatTransactionCustomer(t),
+              priceTypeLabel: transactionItemPriceTypeLabel(item, medInfo),
               cashierName: t.cashierName,
               paymentMethod: t.paymentMethod,
               medicineId: item.medicineId,
@@ -2413,8 +2602,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               name: item.medicineName,
               category: cat,
               unit: item.unit,
+              packageLabel: transactionItemPackageLabel(item),
+              displayLabel: transactionItemDisplayLabel(item),
+              baseDisplayLabel: transactionItemBaseDisplayLabel(item, medInfo),
+              unitMultiplier: item.unitMultiplier || 1,
               qty: item.qty,
-              price: item.price,
+              price: transactionItemSalePrice(item),
               subtotal,
               costPrice: hppPerUnit,
               costSubtotal,
@@ -2423,6 +2616,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               dpp,
               ppnVal,
               margin,
+              noBatch: item.noBatch || medInfo?.noBatch || undefined,
             });
           });
         });
@@ -2448,6 +2642,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
         const totalHpp = filteredObatItems.reduce((sum, i) => sum + i.costSubtotal, 0);
         const totalMargin = totalGross - totalHpp;
         const totalQtySold = filteredObatItems.reduce((sum, i) => sum + i.qty, 0);
+        const totalBaseQtySold = filteredObatItems.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0);
         const marginPct = totalGross > 0 ? ((totalMargin / totalGross) * 100).toFixed(1) : '0';
 
         const ppnItems = obatItemsList.filter(i => i.isPpn);
@@ -2456,10 +2651,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
         const ppnGross = ppnItems.reduce((sum, i) => sum + i.subtotal, 0);
         const ppnDpp = ppnItems.reduce((sum, i) => sum + i.dpp, 0);
         const ppnValSum = ppnItems.reduce((sum, i) => sum + i.ppnVal, 0);
-        const ppnQty = ppnItems.reduce((sum, i) => sum + i.qty, 0);
+        const ppnBaseQty = ppnItems.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0);
 
         const nonPpnGross = nonPpnItems.reduce((sum, i) => sum + i.subtotal, 0);
-        const nonPpnQty = nonPpnItems.reduce((sum, i) => sum + i.qty, 0);
+        const nonPpnBaseQty = nonPpnItems.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0);
 
         const paginatedObatItems = filteredObatItems.slice((reportObatPage - 1) * ITEMS_PER_PAGE, reportObatPage * ITEMS_PER_PAGE);
 
@@ -2562,7 +2757,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Omset Obat</span>
                 <span className="text-lg font-black text-slate-900 block mt-0.5">{formatRupiah(totalGross)}</span>
-                <span className="text-[10px] text-emerald-600 font-bold block mt-0.5">{totalQtySold} item terjual</span>
+                <span className="text-[10px] text-emerald-600 font-bold block mt-0.5">{totalBaseQtySold} unit terkecil terjual</span>
+                <span className="text-[10px] text-slate-400 block">{totalQtySold} qty transaksi</span>
               </div>
 
               <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
@@ -2609,8 +2805,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-2xl font-black text-blue-300">{ppnQty}</span>
-                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                  <span className="text-2xl font-black text-blue-300">{ppnBaseQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit terkecil terjual</span>
                 </div>
               </div>
 
@@ -2625,8 +2821,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-2xl font-black text-slate-300">{nonPpnQty}</span>
-                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                  <span className="text-2xl font-black text-slate-300">{nonPpnBaseQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit terkecil terjual</span>
                 </div>
               </div>
             </div>
@@ -2649,6 +2845,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                     <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                       <th className="py-3 px-3">No TRX & Waktu</th>
                       <th className="py-3 px-3">Kode & Nama Obat</th>
+                      <th className="py-3 px-3">No. Batch</th>
                       <th className="py-3 px-3">Kategori</th>
                       <th className="py-3 px-3 text-center">Status Tax</th>
                       <th className="py-3 px-3 text-center">Qty</th>
@@ -2664,7 +2861,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   <tbody className="divide-y divide-slate-100">
                     {paginatedObatItems.length === 0 ? (
                       <tr>
-                        <td colSpan={12} className="py-8 text-center text-slate-400 font-medium">
+                        <td colSpan={13} className="py-8 text-center text-slate-400 font-medium">
                           Tidak ada transaksi penjualan produk obat ditemukan untuk kriteria filter ini.
                         </td>
                       </tr>
@@ -2678,7 +2875,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                           <td className="py-2.5 px-3">
                             <span className="font-mono text-slate-400 text-[10px] block">{item.code}</span>
                             <span className="font-bold text-slate-900">{item.name}</span>
+                            <span className="text-[10px] text-slate-500 block">Customer: <strong className="text-slate-700">{item.customerLabel}</strong></span>
+                            <span className="text-[10px] text-indigo-600 block">Jenis harga: {item.priceTypeLabel}</span>
                           </td>
+                          <td className="py-2.5 px-3 text-slate-500">{item.noBatch || '-'}</td>
                           <td className="py-2.5 px-3 font-semibold text-slate-600">{item.category}</td>
                           <td className="py-2.5 px-3 text-center">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
@@ -2688,9 +2888,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-center font-bold text-slate-900">
-                            {item.qty} {item.unit}
+                            <span className="block">{item.displayLabel}</span>
+                            <span className="block text-[10px] text-slate-500">{item.baseDisplayLabel}</span>
                           </td>
-                          <td className="py-2.5 px-3 text-right font-medium text-slate-700">{formatRupiah(item.price)}</td>
+                           <td className="py-2.5 px-3 text-right font-medium text-slate-700">{formatRupiah(item.price)}</td>
                           <td className="py-2.5 px-3 text-right font-semibold text-emerald-800">{formatRupiah(item.dpp)}</td>
                           <td className="py-2.5 px-3 text-right font-bold text-amber-700">{formatRupiah(item.ppnVal)}</td>
                           <td className="py-2.5 px-3 text-right font-extrabold text-slate-900">{formatRupiah(item.subtotal)}</td>
@@ -2715,8 +2916,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   {filteredObatItems.length > 0 && (
                     <tfoot>
                       <tr className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300 text-xs">
-                        <td colSpan={4} className="py-3 px-3 uppercase text-right">TOTAL RECORD TERFILTER ({filteredObatItems.length} ITEM):</td>
-                        <td className="py-3 px-3 text-center text-blue-900 font-extrabold">{totalQtySold}</td>
+                        <td colSpan={5} className="py-3 px-3 uppercase text-right">TOTAL RECORD TERFILTER ({filteredObatItems.length} ITEM):</td>
+                        <td className="py-3 px-3 text-center text-blue-900 font-extrabold">
+                          <span className="block">{totalQtySold} qty</span>
+                          <span className="block text-[10px] text-slate-500">{totalBaseQtySold} unit terkecil</span>
+                        </td>
                         <td className="py-3 px-3 text-right text-slate-400">-</td>
                         <td className="py-3 px-3 text-right text-emerald-800">{formatRupiah(totalDpp)}</td>
                         <td className="py-3 px-3 text-right text-amber-800">{formatRupiah(totalPpn)}</td>
@@ -2757,15 +2961,21 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
         const nonObatItemsList: Array<{
           trxId: string;
           trxNo: string;
-          date: string;
-          customerName: string;
-          cashierName: string;
+           date: string;
+           customerName: string;
+           customerLabel: string;
+           priceTypeLabel: string;
+           cashierName: string;
           paymentMethod: string;
           medicineId: string;
           code: string;
           name: string;
           category: string;
           unit: string;
+          packageLabel: string;
+          displayLabel: string;
+          baseDisplayLabel: string;
+          unitMultiplier: number;
           qty: number;
           price: number;
           subtotal: number;
@@ -2776,6 +2986,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
           dpp: number;
           ppnVal: number;
           margin: number;
+          noBatch?: string;
         }> = [];
 
         basePeriodTrxs.forEach(t => {
@@ -2789,17 +3000,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
 
             const isPpn = getItemIsPpn(item, t, medInfo);
             const rate = item.ppnRate || t.ppnRate || 11;
-            const subtotal = item.subtotal || (item.price * item.qty);
+            const subtotal = item.subtotal ?? (transactionItemSalePrice(item) * item.qty);
             const dpp = isPpn ? Math.round(subtotal / (1 + rate / 100)) : subtotal;
             const ppnVal = isPpn ? (subtotal - dpp) : 0;
-            const masterMult = medInfo?.unit === 'Lusin' ? 12 : (medInfo?.unitMultiplier || 1);
-            const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
-            const rawPurchasePrice = item.purchasePrice ?? (medInfo?.purchasePrice || Math.round(item.price * 0.75));
-
-            const costPerPcs = masterMult > 1 ? rawPurchasePrice / masterMult : rawPurchasePrice;
-            const qtyPcs = item.qty * itemMult;
-            const costSubtotal = Math.round(costPerPcs * qtyPcs);
-            const hppPerUnit = item.qty > 0 ? Math.round(costSubtotal / item.qty) : costPerPcs;
+            const costSubtotal = transactionItemCost(item, medInfo);
+            const hppPerUnit = item.qty > 0 ? Math.round(costSubtotal / item.qty) : 0;
             const margin = subtotal - costSubtotal;
 
             nonObatItemsList.push({
@@ -2807,6 +3012,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               trxNo: t.trxNo,
               date: t.date,
               customerName: t.customerName || 'Customer Umum',
+              customerLabel: formatTransactionCustomer(t),
+              priceTypeLabel: transactionItemPriceTypeLabel(item, medInfo),
               cashierName: t.cashierName,
               paymentMethod: t.paymentMethod,
               medicineId: item.medicineId,
@@ -2814,8 +3021,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               name: item.medicineName,
               category: cat,
               unit: item.unit,
+              packageLabel: transactionItemPackageLabel(item),
+              displayLabel: transactionItemDisplayLabel(item),
+              baseDisplayLabel: transactionItemBaseDisplayLabel(item, medInfo),
+              unitMultiplier: item.unitMultiplier || 1,
               qty: item.qty,
-              price: item.price,
+              price: transactionItemSalePrice(item),
               subtotal,
               costPrice: hppPerUnit,
               costSubtotal,
@@ -2824,6 +3035,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               dpp,
               ppnVal,
               margin,
+              noBatch: item.noBatch || medInfo?.noBatch || undefined,
             });
           });
         });
@@ -2849,6 +3061,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
         const totalHpp = filteredNonObatItems.reduce((sum, i) => sum + i.costSubtotal, 0);
         const totalMargin = totalGross - totalHpp;
         const totalQtySold = filteredNonObatItems.reduce((sum, i) => sum + i.qty, 0);
+        const totalBaseQtySold = filteredNonObatItems.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0);
         const marginPct = totalGross > 0 ? ((totalMargin / totalGross) * 100).toFixed(1) : '0';
 
         const ppnItems = nonObatItemsList.filter(i => i.isPpn);
@@ -2857,10 +3070,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
         const ppnGross = ppnItems.reduce((sum, i) => sum + i.subtotal, 0);
         const ppnDpp = ppnItems.reduce((sum, i) => sum + i.dpp, 0);
         const ppnValSum = ppnItems.reduce((sum, i) => sum + i.ppnVal, 0);
-        const ppnQty = ppnItems.reduce((sum, i) => sum + i.qty, 0);
+        const ppnBaseQty = ppnItems.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0);
 
         const nonPpnGross = nonPpnItems.reduce((sum, i) => sum + i.subtotal, 0);
-        const nonPpnQty = nonPpnItems.reduce((sum, i) => sum + i.qty, 0);
+        const nonPpnBaseQty = nonPpnItems.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0);
 
         const paginatedNonObatItems = filteredNonObatItems.slice((reportNonObatPage - 1) * ITEMS_PER_PAGE, reportNonObatPage * ITEMS_PER_PAGE);
 
@@ -2963,7 +3176,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
               <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Omset Non-Obat</span>
                 <span className="text-lg font-black text-slate-900 block mt-0.5">{formatRupiah(totalGross)}</span>
-                <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">{totalQtySold} item terjual</span>
+                <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">{totalBaseQtySold} unit terkecil terjual</span>
+                <span className="text-[10px] text-slate-400 block">{totalQtySold} qty transaksi</span>
               </div>
 
               <div className="p-3.5 bg-white rounded-2xl border border-slate-100 shadow-2xs">
@@ -3010,8 +3224,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-2xl font-black text-indigo-300">{ppnQty}</span>
-                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                  <span className="text-2xl font-black text-indigo-300">{ppnBaseQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit terkecil terjual</span>
                 </div>
               </div>
 
@@ -3026,8 +3240,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-2xl font-black text-slate-300">{nonPpnQty}</span>
-                  <span className="text-[10px] text-slate-300 block">Unit Terjual</span>
+                  <span className="text-2xl font-black text-slate-300">{nonPpnBaseQty}</span>
+                  <span className="text-[10px] text-slate-300 block">Unit terkecil terjual</span>
                 </div>
               </div>
             </div>
@@ -3050,6 +3264,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                     <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                       <th className="py-3 px-3">No TRX & Waktu</th>
                       <th className="py-3 px-3">Kode & Nama Produk</th>
+                      <th className="py-3 px-3">No. Batch</th>
                       <th className="py-3 px-3">Kategori</th>
                       <th className="py-3 px-3 text-center">Status Tax</th>
                       <th className="py-3 px-3 text-center">Qty</th>
@@ -3065,7 +3280,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   <tbody className="divide-y divide-slate-100">
                     {paginatedNonObatItems.length === 0 ? (
                       <tr>
-                        <td colSpan={12} className="py-8 text-center text-slate-400 font-medium">
+                        <td colSpan={13} className="py-8 text-center text-slate-400 font-medium">
                           Tidak ada transaksi penjualan produk non-obat ditemukan untuk kriteria filter ini.
                         </td>
                       </tr>
@@ -3079,7 +3294,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                           <td className="py-2.5 px-3">
                             <span className="font-mono text-slate-400 text-[10px] block">{item.code}</span>
                             <span className="font-bold text-slate-900">{item.name}</span>
+                            <span className="text-[10px] text-slate-500 block">Customer: <strong className="text-slate-700">{item.customerLabel}</strong></span>
+                            <span className="text-[10px] text-indigo-600 block">Jenis harga: {item.priceTypeLabel}</span>
                           </td>
+                          <td className="py-2.5 px-3 text-slate-500">{item.noBatch || '-'}</td>
                           <td className="py-2.5 px-3 font-semibold text-slate-600">{item.category}</td>
                           <td className="py-2.5 px-3 text-center">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
@@ -3089,9 +3307,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-center font-bold text-slate-900">
-                            {item.qty} {item.unit}
+                            <span className="block">{item.displayLabel}</span>
+                            <span className="block text-[10px] text-slate-500">{item.baseDisplayLabel}</span>
                           </td>
-                          <td className="py-2.5 px-3 text-right font-medium text-slate-700">{formatRupiah(item.price)}</td>
+                           <td className="py-2.5 px-3 text-right font-medium text-slate-700">{formatRupiah(item.price)}</td>
                           <td className="py-2.5 px-3 text-right font-semibold text-indigo-800">{formatRupiah(item.dpp)}</td>
                           <td className="py-2.5 px-3 text-right font-bold text-amber-700">{formatRupiah(item.ppnVal)}</td>
                           <td className="py-2.5 px-3 text-right font-extrabold text-slate-900">{formatRupiah(item.subtotal)}</td>
@@ -3116,8 +3335,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   {filteredNonObatItems.length > 0 && (
                     <tfoot>
                       <tr className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300 text-xs">
-                        <td colSpan={4} className="py-3 px-3 uppercase text-right">TOTAL RECORD TERFILTER ({filteredNonObatItems.length} ITEM):</td>
-                        <td className="py-3 px-3 text-center text-blue-900 font-extrabold">{totalQtySold}</td>
+                        <td colSpan={5} className="py-3 px-3 uppercase text-right">TOTAL RECORD TERFILTER ({filteredNonObatItems.length} ITEM):</td>
+                        <td className="py-3 px-3 text-center text-blue-900 font-extrabold">
+                          <span className="block">{totalQtySold} qty</span>
+                          <span className="block text-[10px] text-slate-500">{totalBaseQtySold} unit terkecil</span>
+                        </td>
                         <td className="py-3 px-3 text-right text-slate-400">-</td>
                         <td className="py-3 px-3 text-right text-indigo-800">{formatRupiah(totalDpp)}</td>
                         <td className="py-3 px-3 text-right text-amber-800">{formatRupiah(totalPpn)}</td>
@@ -3397,6 +3619,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       <th className="py-3 px-4">No. Dokumen / Trx</th>
                       <th className="py-3 px-4">Tanggal & Waktu</th>
                       <th className="py-3 px-4">Customer / Pembeli</th>
+                      <th className="py-3 px-4">Jenis Harga</th>
                       <th className="py-3 px-4 text-center">Status Perpajakan</th>
                       <th className="py-3 px-4 text-right">DPP (Rp)</th>
                       <th className="py-3 px-4 text-right">PPN 11% (Rp)</th>
@@ -3407,7 +3630,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   <tbody className="divide-y divide-slate-100">
                     {paginatedTaxTransactions.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-8 text-center text-slate-400">
+                        <td colSpan={9} className="py-8 text-center text-slate-400">
                           Tidak ada data transaksi perpajakan dalam periode terpilih.
                         </td>
                       </tr>
@@ -3422,7 +3645,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                           <tr key={t.id} className="hover:bg-slate-50 transition-colors">
                             <td className="py-3 px-4 font-mono font-bold text-slate-900">{t.trxNo}</td>
                             <td className="py-3 px-4 text-slate-600">{formatDateTime(t.date)}</td>
-                            <td className="py-3 px-4 font-semibold text-slate-800">{t.customerName || 'Customer Umum'}</td>
+                            <td className="py-3 px-4 font-semibold text-slate-800">{formatTransactionCustomer(t)}</td>
+                            <td className="py-3 px-4 text-slate-600 max-w-xs">{getTransactionPriceTypeLabels(t).join(', ') || '-'}</td>
                             <td className="py-3 px-4 text-center">
                               <span className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded border ${
                                 isPpn
@@ -3464,7 +3688,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   {taxTransactions.length > 0 && (
                     <tfoot>
                       <tr className="bg-slate-100 font-bold border-t-2 border-slate-300 text-xs text-slate-900">
-                        <td colSpan={4} className="py-3 px-4 text-right uppercase tracking-wider">Total Rekapitulasi Tabel:</td>
+                        <td colSpan={5} className="py-3 px-4 text-right uppercase tracking-wider">Total Rekapitulasi Tabel:</td>
                         <td className="py-3 px-4 text-right text-emerald-900 font-extrabold">{formatRupiah(tableTotalDpp)}</td>
                         <td className="py-3 px-4 text-right text-amber-800 font-extrabold">{formatRupiah(tableTotalPpn)}</td>
                         <td className="py-3 px-4 text-right text-emerald-950 font-black">{formatRupiah(tableTotalBruto)}</td>
@@ -3573,10 +3797,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                 <div className="bg-white p-3.5 rounded-xl border border-slate-200 grid grid-cols-2 gap-3 text-xs">
                   <div>
                     <span className="text-slate-400 text-[10px] font-bold block uppercase">Customer / Pembeli</span>
-                    <span className="font-bold text-slate-900">{selectedTrxDetail.customerName || 'Customer Umum'}</span>
+                    <span className="font-bold text-slate-900">{formatTransactionCustomer(selectedTrxDetail)}</span>
                     {selectedTrxDetail.customerMemberNo && (
                       <span className="block text-[10px] text-emerald-700 font-mono">No. Member: {selectedTrxDetail.customerMemberNo}</span>
                     )}
+                    <span className="block text-[10px] text-indigo-600">Jenis harga: {getTransactionPriceTypeLabels(selectedTrxDetail).join(', ') || '-'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 text-[10px] font-bold block uppercase">Dokter & Jenis Resep</span>
@@ -3614,6 +3839,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                             <thead>
                               <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase">
                                 <th className="py-2.5 px-3">Kode & Nama Obat</th>
+                                <th className="py-2.5 px-3">No. Batch</th>
                                 <th className="py-2.5 px-3 text-center">Status & Nominal PPN</th>
                                 <th className="py-2.5 px-3 text-center">Harga Satuan</th>
                                 <th className="py-2.5 px-3 text-center">Qty</th>
@@ -3632,7 +3858,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                                     <td className="py-2 px-3">
                                       <span className="font-mono text-slate-400 text-[10px] block">{item.medicineCode || item.code || '-'}</span>
                                       <span className="font-bold text-slate-900">{item.medicineName || item.name}</span>
+                                      <span className="block text-[10px] text-indigo-600">{transactionItemPriceTypeLabel(item, medInfo)}</span>
                                     </td>
+                                    <td className="py-2 px-3 text-slate-500">{item.noBatch || '-'}</td>
                                     <td className="py-2 px-3 text-center">
                                       {itemIsPpn ? (
                                         <div>
@@ -3654,8 +3882,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                                         </div>
                                       )}
                                     </td>
-                                    <td className="py-2 px-3 text-center font-medium text-slate-700">{formatRupiah(item.price)}</td>
-                                    <td className="py-2 px-3 text-center font-bold text-slate-900">{item.qty} {item.unit || 'pcs'}</td>
+                                    <td className="py-2 px-3 text-center font-medium text-slate-700">{formatRupiah(transactionItemSalePrice(item))}</td>
+                                    <td className="py-2 px-3 text-center font-bold text-slate-900">
+                                      <span className="block">{transactionItemDisplayLabel(item)}</span>
+                                      <span className="block text-[10px] text-slate-500">{transactionItemBaseDisplayLabel(item, medInfo)}</span>
+                                    </td>
                                     <td className="py-2 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(item.subtotal)}</td>
                                   </tr>
                                 );
@@ -3707,7 +3938,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                       <h3 className="font-extrabold text-lg text-white">{selectedMedicineDetail.name}</h3>
                     </div>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Kategori: {selectedMedicineDetail.category} • Stok Fisik: <strong className="text-emerald-300">{formatStockDisplay(selectedMedicineDetail.stock, selectedMedicineDetail.unit, selectedMedicineDetail.unitMultiplier)}</strong> (Batas Min: {selectedMedicineDetail.minStock})
+                      Kategori: {selectedMedicineDetail.category} • No. Batch: <strong className="text-emerald-300">{selectedMedicineDetail.noBatch || '-'}</strong> • Stok Fisik: <strong className="text-emerald-300">{formatStockDisplay(selectedMedicineDetail.stock, selectedMedicineDetail.unit, selectedMedicineDetail.unitMultiplier, selectedMedicineDetail.units)}</strong> (Batas Min: {selectedMedicineDetail.minStock})
                     </p>
                   </div>
                 </div>
@@ -3768,6 +3999,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                                 <th className="py-2.5 px-3">No TRX</th>
                                 <th className="py-2.5 px-3">Tanggal Waktu</th>
                                 <th className="py-2.5 px-3">Customer</th>
+                                <th className="py-2.5 px-3">Jenis Harga</th>
                                 <th className="py-2.5 px-3 text-center">Qty Terjual</th>
                                 <th className="py-2.5 px-3 text-right">Subtotal Omset</th>
                               </tr>
@@ -3779,8 +4011,16 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                                   <tr key={t.id} className="hover:bg-slate-50">
                                     <td className="py-2 px-3 font-mono font-bold text-slate-900">{t.trxNo}</td>
                                     <td className="py-2 px-3 text-slate-600">{formatDateTime(t.date)}</td>
-                                    <td className="py-2 px-3 font-semibold text-slate-800">{t.customerName || 'Umum'}</td>
-                                    <td className="py-2 px-3 text-center font-bold text-blue-700">{item?.qty || 0} {selectedMedicineDetail.unit}</td>
+                                    <td className="py-2 px-3 font-semibold text-slate-800">{formatTransactionCustomer(t)}</td>
+                                    <td className="py-2 px-3 text-slate-600">{item ? transactionItemPriceTypeLabel(item, selectedMedicineDetail) : '-'}</td>
+                                    <td className="py-2 px-3 text-center font-bold text-blue-700">
+                                      {item ? (
+                                        <>
+                                          <span className="block">{transactionItemDisplayLabel(item)}</span>
+                                          <span className="block text-[10px] text-slate-500">{transactionItemBaseDisplayLabel(item, selectedMedicineDetail)}</span>
+                                        </>
+                                      ) : '-'}
+                                    </td>
                                     <td className="py-2 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(item?.subtotal || 0)}</td>
                                   </tr>
                                 );
@@ -3844,6 +4084,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                                   <td className="py-2 px-3 text-center font-mono font-bold text-slate-900">{h.finalStock ?? '-'}</td>
                                   <td className="py-2 px-3 text-slate-600 text-[11px]">
                                     <strong>{h.user || 'Sistem'}</strong>: {h.notes || h.reason || '-'}
+                                    {(() => {
+                                      const relatedTransaction = transactions.find(t => (h.note || h.notes || '').includes(t.trxNo));
+                                      const relatedItems = relatedTransaction?.items.filter(item => item.medicineId === selectedMedicineDetail.id || item.medicineName === selectedMedicineDetail.name) || [];
+                                      return (
+                                        <span className="block text-[10px] text-slate-500 mt-0.5">
+                                          Customer: {relatedTransaction ? formatTransactionCustomer(relatedTransaction) : '-'} · Jenis harga: {uniqueLabels(relatedItems.map(item => transactionItemPriceTypeLabel(item, selectedMedicineDetail))).join(', ') || '-'}
+                                        </span>
+                                      );
+                                    })()}
                                   </td>
                                 </tr>
                               ))}
@@ -3895,6 +4144,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                     </div>
                     <p className="text-xs text-slate-400 mt-0.5">
                       Tgl Expired: <strong>{formatDate(selectedExpiredDetail.expiredDate)}</strong>
+                      {selectedExpiredDetail.noBatch && (
+                        <> • Batch: <strong>{selectedExpiredDetail.noBatch}</strong></>
+                      )}
                     </p>
                   </div>
                 </div>
@@ -3922,12 +4174,18 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab = 'penjuala
                   </div>
                   <div className="p-3.5 bg-white rounded-xl border border-slate-200">
                     <span className="text-[10px] font-bold text-slate-400 block uppercase">Stok Tersedia</span>
-                    <span className="text-xl font-black text-slate-900 block mt-0.5">{formatStockDisplay(selectedExpiredDetail.stock, selectedExpiredDetail.unit, selectedExpiredDetail.unitMultiplier)}</span>
+                    <span className="text-xl font-black text-slate-900 block mt-0.5">{formatStockDisplay(selectedExpiredDetail.stock, selectedExpiredDetail.unit, selectedExpiredDetail.unitMultiplier, selectedExpiredDetail.units)}</span>
                   </div>
                   <div className="p-3.5 bg-white rounded-xl border border-slate-200">
                     <span className="text-[10px] font-bold text-rose-700 block uppercase">Nilai Kerugian / Sediaan</span>
                     <span className="text-xl font-black text-rose-800 block mt-0.5">{formatRupiah(selectedExpiredDetail.stock * selectedExpiredDetail.price)}</span>
                   </div>
+                </div>
+
+                <div className="bg-white border border-slate-200 p-3.5 rounded-xl text-xs space-y-1">
+                  <div className="font-bold text-slate-700">Riwayat transaksi terkait</div>
+                  <div className="text-slate-500">Customer: <strong className="text-slate-800">{getMedicineCustomerLabels(selectedExpiredDetail).join(', ') || '-'}</strong></div>
+                  <div className="text-slate-500">Jenis harga: <strong className="text-slate-800">{getMedicinePriceTypeLabels(selectedExpiredDetail).join(', ') || '-'}</strong></div>
                 </div>
 
                 <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl text-xs text-amber-900 space-y-1">

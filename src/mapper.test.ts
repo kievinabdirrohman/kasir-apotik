@@ -56,6 +56,17 @@ assert.equal(stockTs.userName, 'Rina'); // ponytail: user_name→userName via ge
 // NOTE: user_name ↔ user is intentionally asymmetric (toSQL only).
 // toTS produces userName (generic rule); callers map that back to .user via destructuring.
 
+// --- noBatch ↔ no_batch mapping (optional batch number) ---
+const batchRoundTrip = toTS(toSQL({ noBatch: 'BATCH-2026-01' }));
+assert.deepEqual(batchRoundTrip, { noBatch: 'BATCH-2026-01' }, 'noBatch must map to no_batch and back');
+assert.equal(toTS({ no_batch: null }).noBatch, undefined, 'absent no_batch (NULL) must map to undefined');
+
+// --- customerId/customerName ↔ customer_id/customer_name mapping ---
+const custRoundTrip = toTS(toSQL({ customerId: 'cust-1', customerName: 'Budi' }));
+assert.equal(custRoundTrip.customerId, 'cust-1', 'customerId must map to customer_id and back');
+assert.equal(custRoundTrip.customerName, 'Budi', 'customerName must map to customer_name and back');
+assert.equal(toTS({ customer_id: null }).customerId, undefined, 'absent customer_id (NULL) must map to undefined');
+
 console.log('mapper self-check: all assertions passed ✓');
 
 // --- P1: toTS(toSQL(obj)) === obj for representative non-optional fields ---

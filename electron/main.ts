@@ -11,15 +11,30 @@
  *    receipt (58mm / 80mm), and a test print.
  */
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import type { Server } from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { createServerApp } from '../src/server/app.js';
+import {
+  copyAndVerifyDatabase,
+  describeStorageLocation,
+  getBackupPath,
+  resolveDatabasePath,
+  validateStorageTarget,
+  writeStorageLocation,
+} from './storage.js';
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:3000';
 
 let mainWindow: BrowserWindow | null = null;
 let printWindow: BrowserWindow | null = null;
+let apiServer: Server | null = null;
+let apiDb: ReturnType<typeof createServerApp>['db'] | null = null;
 let apiPort = 0;
+let storageUserDataPath = '';
+let activeDatabasePath = '';
+let storageMigrationRunning = false;
 
 function getApiBase(): string {
   return `http://127.0.0.1:${apiPort}`;
@@ -35,21 +50,80 @@ function paperSizeMicrons(paperWidth?: string): { width: number; height: number 
 // ---------------------------------------------------------------------------
 // In-process API server (Express + SQLite)
 // ---------------------------------------------------------------------------
-function startApiServer(): Promise<void> {
+function startApiServer(databasePath: string): Promise<void> {
   return new Promise((resolve) => {
-    const { app: serverApp } = createServerApp({
-      dbPath: path.join(app.getPath('userData'), 'apotek.db'),
+    const created = createServerApp({
+      dbPath: databasePath,
       corsOrigin: '*',
     });
+    const serverApp = created.app;
+    apiDb = created.db;
     const server = serverApp.listen(0, '127.0.0.1', () => {
       const addr = server.address();
       if (addr && typeof addr === 'object') {
         apiPort = addr.port;
       }
+      apiServer = server;
+      activeDatabasePath = databasePath;
       console.log(`[electron] API server ready at ${getApiBase()}`);
       resolve();
     });
   });
+}
+
+async function stopApiServer(): Promise<void> {
+  const server = apiServer;
+  apiServer = null;
+  if (server) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  if (apiDb) {
+    apiDb.close();
+    apiDb = null;
+  }
+  apiPort = 0;
+}
+
+function storageLocation() {
+  return describeStorageLocation(storageUserDataPath, activeDatabasePath);
+}
+
+async function migrateStorage(targetFolder: string): Promise<{ success: boolean; databasePath?: string; backupPath?: string; error?: string }> {
+  if (storageMigrationRunning) return { success: false, error: 'Migrasi penyimpanan sedang berjalan.' };
+  if (!apiDb || !activeDatabasePath) return { success: false, error: 'Database aktif belum siap.' };
+
+  storageMigrationRunning = true;
+  const sourcePath = activeDatabasePath;
+  let targetPath = '';
+  try {
+    targetPath = validateStorageTarget(targetFolder, sourcePath);
+    apiDb.pragma('wal_checkpoint(TRUNCATE)');
+    await stopApiServer();
+
+    const backupPath = getBackupPath(sourcePath);
+    fs.copyFileSync(sourcePath, backupPath);
+    copyAndVerifyDatabase(sourcePath, targetPath);
+
+    await startApiServer(targetPath);
+    writeStorageLocation(storageUserDataPath, targetPath);
+    activeDatabasePath = targetPath;
+
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+    }, 50);
+    return { success: true, databasePath: targetPath, backupPath };
+  } catch (err: unknown) {
+    try {
+      if (apiServer || apiDb) await stopApiServer();
+      await startApiServer(sourcePath);
+      activeDatabasePath = sourcePath;
+    } catch (restoreErr) {
+      console.error('[storage] gagal mengembalikan server ke database lama', restoreErr);
+    }
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    storageMigrationRunning = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +151,11 @@ interface PrintPayload {
   html: string;
   paperWidth?: string;
   printerName?: string;
+  printerSettings?: {
+    marginTopMm: number; marginRightMm: number; marginBottomMm: number; marginLeftMm: number;
+    fontSize: number; lineHeight: number; labelWidthPct: number; columnGapMm: number;
+    amountAlignment: 'left' | 'right';
+  };
 }
 
 async function printHtml(payload: PrintPayload): Promise<{ success: boolean; error?: string }> {
@@ -106,9 +185,16 @@ async function printHtml(payload: PrintPayload): Promise<{ success: boolean; err
 }
 
 /** Small sample receipt used by the "Test Printer" button. */
-function buildTestHtml(paperWidth: string, pharmacyName: string): string {
+function buildTestHtml(paperWidth: string, pharmacyName: string, printerSettings?: PrintPayload['printerSettings']): string {
   const width = paperWidth === '80mm' ? 80 : 58;
-  const fontSize = paperWidth === '80mm' ? 13 : 11;
+  const fontSize = printerSettings?.fontSize ?? 7;
+  const lineHeight = printerSettings?.lineHeight ?? 1.2;
+  const padding = printerSettings
+    ? `${printerSettings.marginTopMm}mm ${printerSettings.marginRightMm}mm ${printerSettings.marginBottomMm}mm ${printerSettings.marginLeftMm}mm`
+    : '0mm';
+  const hardwareInsetLeft = 0;
+  const hardwareInsetRight = 0;
+  const contentWidth = width - hardwareInsetLeft - hardwareInsetRight - (printerSettings?.marginLeftMm ?? 0) - (printerSettings?.marginRightMm ?? 0);
   const dashed = '-'.repeat(paperWidth === '80mm' ? 44 : 32);
   return `<!doctype html>
 <html>
@@ -117,7 +203,7 @@ function buildTestHtml(paperWidth: string, pharmacyName: string): string {
 <style>
   @page { size: ${width}mm auto; margin: 0; }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 3mm; width: ${width}mm; font-family: 'Courier New', monospace; font-size: ${fontSize}px; color: #000; }
+  body { margin: 0 ${hardwareInsetRight}mm 0 ${hardwareInsetLeft}mm; padding: ${padding}; width: ${contentWidth}mm; max-width: ${contentWidth}mm; font-family: 'Courier New', monospace; font-size: ${fontSize}pt; line-height: ${lineHeight}; color: #000; }
   .center { text-align: center; }
   .row { display: flex; justify-content: space-between; }
   .dashed { border-top: 1px dashed #000; margin: 6px 0; }
@@ -145,6 +231,24 @@ function buildTestHtml(paperWidth: string, pharmacyName: string): string {
 function registerIpc(): void {
   ipcMain.handle('app:get-api-base', () => getApiBase());
   ipcMain.handle('app:get-version', () => app.getVersion());
+  ipcMain.handle('app:get-storage-location', () => storageLocation());
+  ipcMain.handle('app:choose-storage-folder', async () => {
+    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+      title: 'Pilih Folder Penyimpanan Data Apotek',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+  ipcMain.handle('app:migrate-storage', (_event, targetFolder: unknown) => {
+    if (typeof targetFolder !== 'string') return { success: false, error: 'Folder tujuan tidak valid.' };
+    return migrateStorage(targetFolder);
+  });
+  ipcMain.handle('app:reload', () => {
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+    }, 50);
+    return true;
+  });
 
   ipcMain.handle('printer:list', async () => {
     try {
@@ -159,11 +263,12 @@ function registerIpc(): void {
 
   ipcMain.handle(
     'printer:test',
-    (_event, payload: { paperWidth?: string; printerName?: string; pharmacyName?: string }) =>
+    (_event, payload: { paperWidth?: string; printerName?: string; pharmacyName?: string; printerSettings?: PrintPayload['printerSettings'] }) =>
       printHtml({
-        html: buildTestHtml(payload?.paperWidth ?? '58mm', payload?.pharmacyName ?? 'Apotek'),
+        html: buildTestHtml(payload?.paperWidth ?? '58mm', payload?.pharmacyName ?? 'Apotek', payload?.printerSettings),
         paperWidth: payload?.paperWidth,
         printerName: payload?.printerName,
+        printerSettings: payload?.printerSettings,
       }),
   );
 }
@@ -184,6 +289,7 @@ async function createMainWindow(): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false, // preload uses contextBridge only
+      backgroundThrottling: false,
     },
   });
 
@@ -229,7 +335,9 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     registerIpc();
-    await startApiServer();
+    storageUserDataPath = app.getPath('userData');
+    activeDatabasePath = resolveDatabasePath(storageUserDataPath);
+    await startApiServer(activeDatabasePath);
     await createMainWindow();
 
     app.on('activate', () => {

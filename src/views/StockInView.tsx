@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatDateTime, formatRupiah, getWIBDateString, formatStockDisplay } from '../utils/formatters';
-import { MedicineCategory, StockHistory } from '../types';
+import { Medicine, MedicineCategory, MedicineCustomPriceCustomer, StockHistory } from '../types';
+import { MedicineUnitEditor, type EditableMedicineUnit, type EditableCustomPrice } from '../components/MedicineUnitEditor';
+import { MedicinePriceSummary } from '../components/MedicinePriceSummary';
+import { AVAILABLE_UNITS, getMedicineUnits, getPrimaryUnit, normalizeMedicineUnits, synchronizePrimaryUnit, synchronizeUnitPurchasePrices } from '../utils/unitConversion';
 import {
   PackagePlus,
   History,
@@ -95,7 +98,7 @@ const PaginationControls = ({
 };
 
 export const StockInView: React.FC = () => {
-  const { medicines, addMedicine, addStock, adjustStock, bulkAdjustStock, bulkAddStock, stockHistory, currentUser } = useApp();
+  const { medicines, customers, medicineCustomerPrices, addCustomer, addMedicine, updateMedicine, addStock, adjustStock, bulkAdjustStock, bulkAddStock, stockHistory, currentUser } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'masuk' | 'penyesuaian'>('masuk');
   const [restockItemType, setRestockItemType] = useState<'obat' | 'non_obat'>('obat');
@@ -110,12 +113,19 @@ export const StockInView: React.FC = () => {
   const [newItemStock, setNewItemStock] = useState<number>(10);
   const [newItemMinStock, setNewItemMinStock] = useState<number>(10);
   const [newItemExpiredDate, setNewItemExpiredDate] = useState('');
+  const [newItemNoBatch, setNewItemNoBatch] = useState('');
   const [newItemLocation, setNewItemLocation] = useState('Rak A1');
-  const [newItemPurchasePrice, setNewItemPurchasePrice] = useState<number>(10000);
+  const [newItemPurchasePrice, setNewItemPurchasePrice] = useState<number>(0);
   const [newItemBhpAmount, setNewItemBhpAmount] = useState<number>(0);
-  const [newItemMarginPct, setNewItemMarginPct] = useState<number>(20);
+  const [newItemMarginPct, setNewItemMarginPct] = useState<number>(0);
   const [newItemSellingPrice, setNewItemSellingPrice] = useState<number>(12000);
+  const [newUnitRows, setNewUnitRows] = useState<EditableMedicineUnit[]>([]);
+  const [newCustomPrices, setNewCustomPrices] = useState<EditableCustomPrice[]>([]);
+  const [newNormalCustomerPrices, setNewNormalCustomerPrices] = useState<MedicineCustomPriceCustomer[]>([]);
   const [newItemIsPpn, setNewItemIsPpn] = useState(true);
+  const [newCustomerPriceCustomerId, setNewCustomerPriceCustomerId] = useState('');
+  const [newCustomerPrice, setNewCustomerPrice] = useState(0);
+  const [pendingNewCustomerPrices, setPendingNewCustomerPrices] = useState<Array<{ customerId: string; price: number; unitId?: string }>>([]);
 
   // Modal State for Input Stok Masuk (Dialog Form)
   const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
@@ -123,8 +133,12 @@ export const StockInView: React.FC = () => {
   const [modalMedId, setModalMedId] = useState('');
   const [modalSupplier, setModalSupplier] = useState('PBF Kimia Farma');
   const [modalFakturNo, setModalFakturNo] = useState(`FK-${getWIBDateString().replace(/-/g, '')}-01`);
+  const [modalNoBatch, setModalNoBatch] = useState('');
   const [modalQty, setModalQty] = useState<number>(10);
   const [modalUnit, setModalUnit] = useState<string>('Strip');
+  const [modalUnitRows, setModalUnitRows] = useState<EditableMedicineUnit[]>([]);
+  const [modalCustomPrices, setModalCustomPrices] = useState<EditableCustomPrice[]>([]);
+  const [modalNormalCustomerPrices, setModalNormalCustomerPrices] = useState<MedicineCustomPriceCustomer[]>([]);
   const [modalPurchasePrice, setModalPurchasePrice] = useState<number>(0);
   const [modalBhpAmount, setModalBhpAmount] = useState<number>(0);
   const [modalMarginPct, setModalMarginPct] = useState<number>(20);
@@ -132,6 +146,45 @@ export const StockInView: React.FC = () => {
   const [modalTaxType, setModalTaxType] = useState<'PPN' | 'NON_PPN'>('PPN');
   const [modalNote, setModalNote] = useState('');
   const [modalExpiredDate, setModalExpiredDate] = useState('');
+  const [modalCustomerPriceCustomerId, setModalCustomerPriceCustomerId] = useState('');
+  const [modalCustomerPrice, setModalCustomerPrice] = useState(0);
+  const [pendingModalCustomerPrices, setPendingModalCustomerPrices] = useState<Array<{ customerId: string; price: number; unitId?: string }>>([]);
+
+  const quickAddStockCustomer = async (target: 'new' | 'restock') => {
+    const name = window.prompt('Nama customer baru:')?.trim();
+    const phone = window.prompt('Nomor HP customer:')?.trim();
+    if (!name || !phone) return;
+    const customer = await addCustomer({ name, phone, status: 'Aktif' });
+    if (target === 'new') setNewCustomerPriceCustomerId(customer.id);
+    else setModalCustomerPriceCustomerId(customer.id);
+  };
+
+  const addPendingCustomerPrice = (target: 'new' | 'restock') => {
+    const customerId = target === 'new' ? newCustomerPriceCustomerId : modalCustomerPriceCustomerId;
+    const price = target === 'new' ? newCustomerPrice : modalCustomerPrice;
+    const pending = target === 'new' ? pendingNewCustomerPrices : pendingModalCustomerPrices;
+    if (!customerId || price <= 0) {
+      setErrorMessage('Pilih customer dan isi harga khusus lebih dari 0.');
+      return;
+    }
+    const targetMed = target === 'restock' ? medicines.find(medicine => medicine.id === modalMedId) : undefined;
+    const availableUnits = targetMed ? (modalUnitRows.length ? modalUnitRows : getMedicineUnits(targetMed)) : [];
+    const selectedUnitId = availableUnits.find(unit => unit.unit === modalUnit)?.id;
+    if (pending.some(p => p.customerId === customerId && p.unitId === selectedUnitId) || (target === 'restock' && medicineCustomerPrices.some(p => p.medicineId === modalMedId && p.customerId === customerId && p.unitId === selectedUnitId))) {
+      setErrorMessage('Customer tersebut sudah memiliki harga untuk item dan satuan ini.');
+      return;
+    }
+    if (target === 'new') {
+      setPendingNewCustomerPrices(prev => [...prev, { customerId, price, unitId: selectedUnitId }]);
+      setNewCustomerPriceCustomerId('');
+      setNewCustomerPrice(0);
+    } else {
+      setPendingModalCustomerPrices(prev => [...prev, { customerId, price, unitId: selectedUnitId }]);
+      setModalCustomerPriceCustomerId('');
+      setModalCustomerPrice(0);
+    }
+    setErrorMessage('');
+  };
 
   // Sub-tabs for Opname
   const [opnameTab, setOpnameTab] = useState<'form' | 'log'>('form');
@@ -153,6 +206,7 @@ export const StockInView: React.FC = () => {
   const handleModalPurchasePriceChange = (val: number) => {
     const hpp = Math.max(0, val);
     setModalPurchasePrice(hpp);
+    setModalUnitRows(rows => synchronizeUnitPurchasePrices(rows, hpp));
     const totalCost = hpp + modalBhpAmount;
     const computedSell = Math.round(totalCost * (1 + modalMarginPct / 100));
     setModalSellingPrice(computedSell);
@@ -166,12 +220,10 @@ export const StockInView: React.FC = () => {
     setModalSellingPrice(computedSell);
   };
 
-  const handleModalMarginPctChange = (val: number) => {
-    const margin = val;
+  const handleModalMarginChange = (val: number) => {
+    const margin = Math.max(0, val);
     setModalMarginPct(margin);
-    const totalCost = modalPurchasePrice + modalBhpAmount;
-    const computedSell = Math.round(totalCost * (1 + margin / 100));
-    setModalSellingPrice(computedSell);
+    setModalSellingPrice(Math.round((modalPurchasePrice + modalBhpAmount) * (1 + margin / 100)));
   };
 
   const handleModalSellingPriceChange = (val: number) => {
@@ -184,6 +236,14 @@ export const StockInView: React.FC = () => {
     }
   };
 
+  const handleModalUnitChange = (unitName: string) => {
+    setModalUnit(unitName);
+    const row = modalUnitRows.find(unit => unit.unit === unitName);
+    if (row) {
+      setModalSellingPrice(medicines.find(medicine => medicine.id === modalMedId)?.price || 0);
+    }
+  };
+
   // Open Restock Modal Handler
   const openRestockModal = (type: 'obat' | 'non_obat' = 'obat') => {
     setModalItemType(type);
@@ -193,6 +253,9 @@ export const StockInView: React.FC = () => {
       handleModalMedSelect(defaultMed.id);
     } else {
       setModalMedId('');
+      setModalUnitRows([]);
+      setModalCustomPrices([]);
+      setModalNormalCustomerPrices([]);
       setModalPurchasePrice(0);
       setModalBhpAmount(0);
       setModalMarginPct(20);
@@ -201,19 +264,35 @@ export const StockInView: React.FC = () => {
     setModalQty(10);
     setModalSupplier('PBF Kimia Farma');
     setModalFakturNo(`FK-${getWIBDateString().replace(/-/g, '')}-01`);
+    setModalNoBatch('');
     setModalNote('Penerimaan stok distributor');
+    setModalCustomerPriceCustomerId('');
+    setModalCustomerPrice(0);
+    setPendingModalCustomerPrices([]);
     setIsRestockModalOpen(true);
   };
 
   const handleModalMedSelect = (medId: string) => {
     setModalMedId(medId);
+    setModalCustomerPriceCustomerId('');
+    setModalCustomerPrice(0);
+    setPendingModalCustomerPrices([]);
     const targetMed = medicines.find(m => m.id === medId);
     if (targetMed) {
+      const units = getMedicineUnits(targetMed);
+      const selectedUnit = getPrimaryUnit(targetMed);
+      const primaryMultiplier = Math.max(1, Number(selectedUnit?.multiplierToBase) || 1);
+      const hppFromMedicine = Number(targetMed.purchasePrice ?? 0) / primaryMultiplier;
+      const hpp = hppFromMedicine > 0
+        ? hppFromMedicine
+        : Number(selectedUnit?.purchasePricePerBase ?? (targetMed.purchasePrice || (targetMed.price > 0 ? Math.round(targetMed.price * 0.75) : 0)));
+      setModalUnitRows(synchronizeUnitPurchasePrices(units.map(unit => ({ ...unit })), hpp));
+      setModalCustomPrices((targetMed.customPrices || []).map(price => ({ ...price, customerPrices: (price.customerPrices || []).map(customer => ({ ...customer })) })));
+      setModalNormalCustomerPrices((targetMed.normalCustomerPrices ?? []).map(price => ({ ...price })));
       const isPpn = (targetMed.isPpnIncluded ?? true) && (targetMed.ppnRate ?? 11) > 0;
       const tax = isPpn ? 'PPN' : 'NON_PPN';
       setModalTaxType(tax);
-      setModalUnit(targetMed.unit || 'Pcs');
-      const hpp = targetMed.purchasePrice || (targetMed.price > 0 ? Math.round(targetMed.price * 0.75) : 0);
+      setModalUnit(selectedUnit?.unit || targetMed.unit || 'Pcs');
       const bhp = targetMed.bhpAmount || 0;
       const totalCost = hpp + bhp;
       const sell = targetMed.price || 0;
@@ -233,11 +312,16 @@ export const StockInView: React.FC = () => {
       const computedSellingPrice = sell > 0 ? sell : Math.round(totalCost * (1 + margin / 100));
       setModalSellingPrice(computedSellingPrice);
       setModalExpiredDate(targetMed.expiredDate || '');
+      setModalNoBatch(targetMed.noBatch || '');
     }
   };
 
   const handleRestockModalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (modalCustomerPriceCustomerId && modalCustomerPrice <= 0) {
+      setErrorMessage('Harga customer harus lebih dari 0.');
+      return;
+    }
     if (!modalMedId) {
       setErrorMessage('Mohon pilih sediaan obat / barang.');
       setTimeout(() => setErrorMessage(''), 3000);
@@ -256,10 +340,12 @@ export const StockInView: React.FC = () => {
       return;
     }
 
-    const mult = (modalUnit === 'Lusin' || targetMed.unit === 'Lusin') ? 12 : (targetMed.unitMultiplier || 1);
+    const availableUnits = modalUnitRows.length ? modalUnitRows : getMedicineUnits(targetMed);
+    const selectedUnit = availableUnits.find(unit => unit.unit === modalUnit) || availableUnits[0];
+    const mult = selectedUnit?.multiplierToBase || 1;
     // Jumlah qty dihitung sebagai qty (pcs) langsung — tanpa konversi ×12 per lusin.
-    const totalPcsAdded = modalQty;
-    const qtyLabel = mult > 1 ? `${totalPcsAdded} pcs` : `${modalQty} ${modalUnit}`;
+    const totalPcsAdded = modalQty * mult;
+    const qtyLabel = `${modalQty} ${modalUnit} (${totalPcsAdded} pcs dasar)`;
 
     const isPpn = modalTaxType === 'PPN';
     const computedTaxType: 'PPN' | 'NON_PPN' = isPpn ? 'PPN' : 'NON_PPN';
@@ -273,6 +359,35 @@ export const StockInView: React.FC = () => {
     const fullNote = `[RESTOCK ${computedTaxType}] Supplier: ${modalSupplier || '-'} | Faktur: ${modalFakturNo || '-'} | Qty: ${qtyLabel} | HPP: ${formatRupiah(hpp)}${bhp > 0 ? ` + BHP: ${formatRupiah(bhp)}` : ''} | Margin: ${marginPct}% | Jual: ${formatRupiah(sell)} | ${modalNote || 'Restock via Dialog Modal'}`;
 
     try {
+      const unitRows = modalUnitRows.length ? modalUnitRows : getMedicineUnits(targetMed);
+      const configuredRows = synchronizeUnitPurchasePrices(unitRows, hpp).map((row, index) => ({
+        ...row,
+        id: row.id || `${targetMed.id}-unit-${index}`,
+        medicineId: targetMed.id,
+        ...(index === 0 ? { sellingPrice: sell, marginPct, bhpAmount: bhp } : {}),
+      }));
+      const unitIds = new Map<string, string>();
+      configuredRows.forEach(row => {
+        const id = row.id || row.unit;
+        unitIds.set(id, id);
+        unitIds.set(row.unit, id);
+      });
+      const configuredCustomPrices = modalCustomPrices.map((price, index) => ({
+        ...price,
+        medicineId: targetMed.id,
+        unitId: unitIds.get(price.unitId) || unitIds.get(price.unitName || '') || price.unitId,
+        sortOrder: index,
+      }));
+      const primaryUnit = configuredRows[0];
+      await updateMedicine(modalMedId, {
+        price: sell,
+        purchasePrice: hpp * Math.max(1, Number(primaryUnit?.multiplierToBase) || 1),
+        marginPct,
+        bhpAmount: bhp,
+        units: configuredRows as unknown as Medicine['units'],
+        customPrices: configuredCustomPrices,
+        normalCustomerPrices: modalNormalCustomerPrices,
+      } as Partial<Medicine>);
       await addStock(modalMedId, totalPcsAdded, fullNote, {
         taxType: computedTaxType,
         purchasePrice: hpp,
@@ -280,6 +395,11 @@ export const StockInView: React.FC = () => {
         sellingPrice: sell,
         ppnAmount: isPpn ? Math.round((hpp - hpp / 1.11) * totalPcsAdded) : 0,
         marginPct,
+        noBatch: modalNoBatch.trim() || undefined,
+        inputUnitId: selectedUnit?.id,
+        inputUnit: selectedUnit?.unit || modalUnit,
+        inputQty: modalQty,
+        inputMultiplier: mult,
         updateMedicineMaster: true,
       });
 
@@ -303,18 +423,25 @@ export const StockInView: React.FC = () => {
     setNewItemCode(`OBT-${String(count).padStart(3, '0')}`);
     setNewItemName('');
     setNewItemCategory('Obat Bebas');
-    setNewItemUnit('Strip');
+    setNewItemUnit('Pcs');
     setNewItemStock(10);
     setNewItemMinStock(10);
     const nextYear = new Date();
     nextYear.setFullYear(nextYear.getFullYear() + 1);
     setNewItemExpiredDate(nextYear.toISOString().split('T')[0]);
+    setNewItemNoBatch('');
     setNewItemLocation('Rak A1');
-    setNewItemPurchasePrice(10000);
+    setNewItemPurchasePrice(0);
     setNewItemBhpAmount(0);
-    setNewItemMarginPct(20);
+      setNewItemMarginPct(0);
     setNewItemSellingPrice(12000);
+    setNewUnitRows([{ unit: 'Pcs', multiplierToBase: 1, sortOrder: 0, purchasePricePerBase: 0, isPrimary: true }]);
+    setNewCustomPrices([]);
+    setNewNormalCustomerPrices([]);
     setNewItemIsPpn(true);
+    setNewCustomerPriceCustomerId('');
+    setNewCustomerPrice(0);
+    setPendingNewCustomerPrices([]);
     setIsNewItemModalOpen(true);
   };
 
@@ -330,12 +457,19 @@ export const StockInView: React.FC = () => {
     const nextYear = new Date();
     nextYear.setFullYear(nextYear.getFullYear() + 2);
     setNewItemExpiredDate(nextYear.toISOString().split('T')[0]);
+    setNewItemNoBatch('');
     setNewItemLocation('Etalase Depan');
-    setNewItemPurchasePrice(15000);
+    setNewItemPurchasePrice(0);
     setNewItemBhpAmount(0);
-    setNewItemMarginPct(25);
+      setNewItemMarginPct(0);
     setNewItemSellingPrice(15000);
+    setNewUnitRows([{ unit: 'Pcs', multiplierToBase: 1, sortOrder: 0, purchasePricePerBase: 0, isPrimary: true }]);
+    setNewCustomPrices([]);
+    setNewNormalCustomerPrices([]);
     setNewItemIsPpn(false);
+    setNewCustomerPriceCustomerId('');
+    setNewCustomerPrice(0);
+    setPendingNewCustomerPrices([]);
     setIsNewItemModalOpen(true);
   };
 
@@ -348,9 +482,31 @@ export const StockInView: React.FC = () => {
     }
 
     const computedSellingPrice = Number(newItemSellingPrice || 0);
-    const hpp = Math.round(computedSellingPrice * 0.75);
+    const hpp = 0;
     const bhp = 0;
-    const margin = 20;
+    const margin = 0;
+
+    const sourceUnits = normalizeMedicineUnits(newUnitRows.length ? newUnitRows : [{ unit: newItemUnit, multiplierToBase: newItemUnit === 'Lusin' ? 12 : 1, sortOrder: 0, purchasePricePerBase: 0, isPrimary: true }]);
+    const primaryIndex = 0;
+    const configuredUnits = sourceUnits.map((row, index) => ({
+      ...row,
+      id: row.id || `new-unit-${Date.now()}-${index}`,
+      medicineId: '',
+      sortOrder: index,
+      purchasePricePerBase: 0,
+    }));
+    const primary = configuredUnits[0];
+    const unitIds = new Map<string, string>();
+    configuredUnits.forEach(row => {
+      const id = row.id || row.unit;
+      unitIds.set(id, id);
+      unitIds.set(row.unit, id);
+    });
+    const configuredCustomPrices = newCustomPrices.map((price, index) => ({
+      ...price,
+      unitId: unitIds.get(price.unitId) || unitIds.get(price.unitName || '') || price.unitId,
+      sortOrder: index,
+    }));
 
     const medData = {
       code: newItemCode,
@@ -360,9 +516,10 @@ export const StockInView: React.FC = () => {
       purchasePrice: hpp,
       stock: Number(newItemStock || 0),
       minStock: Number(newItemMinStock || 10),
-      unit: newItemUnit,
-      unitMultiplier: newItemUnit === 'Lusin' ? 12 : 1,
+      unit: primary.unit,
+      unitMultiplier: primary.multiplierToBase,
       expiredDate: newItemExpiredDate,
+      noBatch: newItemNoBatch.trim() || undefined,
       location: newItemLocation,
       isActive: true,
       itemType: newItemType,
@@ -374,6 +531,9 @@ export const StockInView: React.FC = () => {
       purchasePriceIncPpn: newItemIsPpn ? hpp : Math.round(hpp * 1.11),
       priceNonPpn: newItemIsPpn ? Math.round(computedSellingPrice / 1.11) : computedSellingPrice,
       priceIncPpn: newItemIsPpn ? computedSellingPrice : Math.round(computedSellingPrice * 1.11),
+      units: configuredUnits,
+      customPrices: configuredCustomPrices,
+      normalCustomerPrices: newNormalCustomerPrices,
     };
 
     try {
@@ -536,6 +696,7 @@ export const StockInView: React.FC = () => {
   const [opnameSearchTerm, setOpnameSearchTerm] = useState('');
   const [showOnlyDiff, setShowOnlyDiff] = useState(false);
   const [globalOpnameNote, setGlobalOpnameNote] = useState('Stok opnam fisik berkala');
+  const [globalOpnameNoBatch, setGlobalOpnameNoBatch] = useState('');
 
   // Modal confirmation for Bulk Opname
   const [opnameConfirmModal, setOpnameConfirmModal] = useState<{
@@ -1182,6 +1343,7 @@ export const StockInView: React.FC = () => {
       medicineId: item.medicineId,
       newStock: item.newStock,
       note: `[BULK OPNAME] ${globalOpnameNote} ${item.note ? '- ' + item.note : ''}`.trim(),
+      noBatch: globalOpnameNoBatch.trim() || undefined,
     }));
 
     await bulkAdjustStock(adjustments);
@@ -1757,10 +1919,12 @@ export const StockInView: React.FC = () => {
                     <tr>
                       <th className="py-2.5 px-3">Waktu & Petugas</th>
                       <th className="py-2.5 px-3">Kode & Nama Obat</th>
+                      <th className="py-2.5 px-3">No. Batch</th>
                       <th className="py-2.5 px-3 text-center">Status Perpajakan</th>
                       <th className="py-2.5 px-3 text-center">Jumlah Masuk</th>
                       <th className="py-2.5 px-3 text-center">Stok (Sebelum → Sesudah)</th>
                       <th className="py-2.5 px-3">HPP & Harga Jual</th>
+                      <th className="py-2.5 px-3">Semua Harga Aktif</th>
                       <th className="py-2.5 px-3 text-center">Margin %</th>
                       <th className="py-2.5 px-3">Distributor / Catatan Nota</th>
                     </tr>
@@ -1768,7 +1932,7 @@ export const StockInView: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {paginatedRestockHistory.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-8 text-center text-slate-400">
+                        <td colSpan={10} className="py-8 text-center text-slate-400">
                           Belum ada riwayat penerimaan stok masuk yang tercatat.
                         </td>
                       </tr>
@@ -1801,6 +1965,7 @@ export const StockInView: React.FC = () => {
                               <span className="font-mono text-[10px] text-slate-400 block">{sh.medicineCode}</span>
                               <span className="font-bold text-slate-900">{sh.medicineName}</span>
                             </td>
+                            <td className="py-2.5 px-3 text-slate-500">{sh.noBatch || '-'}</td>
                             <td className="py-2.5 px-3 text-center">
                               <span
                                 className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded border ${
@@ -1814,7 +1979,7 @@ export const StockInView: React.FC = () => {
                             </td>
                             <td className="py-2.5 px-3 text-center">
                               <span className="inline-flex items-center gap-1 font-mono font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 rounded-lg text-xs">
-                                +{sh.amount}
+                                {sh.inputQty !== undefined && sh.inputUnit ? `+${sh.inputQty} ${sh.inputUnit} (${sh.amount} Pcs dasar)` : `+${sh.amount} Pcs dasar`}
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-center font-mono">
@@ -1834,6 +1999,14 @@ export const StockInView: React.FC = () => {
                                   <span className="text-indigo-700 font-bold block">Jual: {formatRupiah(sell)}</span>
                                 </div>
                               )}
+                            </td>
+                            <td className="min-w-56 py-2.5 px-3 align-top">
+                              {med ? (
+                                <MedicinePriceSummary
+                                  medicine={med}
+                                  customers={customers}
+                                />
+                              ) : <span className="text-slate-400">-</span>}
                             </td>
                             <td className="py-2.5 px-3 text-center">
                               <span className={`text-[11px] font-black px-2 py-0.5 rounded ${
@@ -2193,9 +2366,9 @@ export const StockInView: React.FC = () => {
               {/* Opname Physical Table */}
               <form onSubmit={handleBulkOpnameSubmit} className="space-y-4">
                 <div className="overflow-x-auto border border-slate-200 rounded-2xl bg-white shadow-2xs">
-                  <table className="w-full text-left border-collapse text-xs">
+                  <table className="w-full text-left border-collapse text-sm">
                     <thead>
-                      <tr className="bg-slate-100/90 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                       <tr className="bg-slate-100/90 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-xs">
                         <th className="py-3 px-3 w-10 text-center">No</th>
                         <th className="py-3 px-3">Kode & Nama Sediaan</th>
                         <th className="py-3 px-3 text-center">Skema PPN</th>
@@ -2230,13 +2403,13 @@ export const StockInView: React.FC = () => {
                               </td>
 
                               <td className="py-2.5 px-3">
-                                <span className="font-mono text-[10px] text-slate-400 block">{m.code}</span>
+                                 <span className="font-mono text-xs text-slate-400 block">{m.code}</span>
                                 <span className="font-bold text-slate-900">{m.name}</span>
                               </td>
 
                               <td className="py-2.5 px-3 text-center">
                                 <span
-                                  className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded border ${
+                                   className={`inline-block text-xs font-extrabold px-2 py-0.5 rounded border ${
                                     isMedPpn
                                       ? 'bg-blue-50 text-blue-900 border-blue-200'
                                       : 'bg-slate-100 text-slate-700 border-slate-200'
@@ -2251,7 +2424,7 @@ export const StockInView: React.FC = () => {
                               </td>
 
                               <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-700">
-                                {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}
+                                {formatStockDisplay(m.stock, m.unit, m.unitMultiplier, m.units)}
                               </td>
 
                               <td className="py-2.5 px-3">
@@ -2260,7 +2433,7 @@ export const StockInView: React.FC = () => {
                                   min="0"
                                   value={rawPhys ?? m.stock}
                                   onChange={e => handlePhysicalStockChange(m.id, e.target.value)}
-                                  className={`w-full px-2.5 py-1.5 rounded-lg border text-center font-bold text-xs focus:outline-none ${
+                                  className={`w-full px-2.5 py-1.5 rounded-lg border text-center font-bold text-sm focus:outline-none ${
                                     diff !== 0
                                       ? 'bg-amber-50 border-amber-400 text-amber-900 font-extrabold'
                                       : 'bg-white border-slate-200 text-slate-800'
@@ -2288,7 +2461,7 @@ export const StockInView: React.FC = () => {
                                   placeholder="Alasan selisih..."
                                   value={bulkOpnameData[m.id]?.note || ''}
                                   onChange={e => handleOpnameRowNoteChange(m.id, e.target.value)}
-                                  className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-emerald-500"
+                                  className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-emerald-500"
                                 />
                               </td>
                             </tr>
@@ -2306,20 +2479,32 @@ export const StockInView: React.FC = () => {
                   />
                 </div>
 
-                <div className="flex items-center justify-between bg-slate-900 text-white p-4 rounded-2xl shadow-md">
-                  <div className="text-xs">
-                    <span className="text-slate-400 block font-bold uppercase text-[10px]">Catatan Global Opnam</span>
-                    <input
-                      type="text"
-                      value={globalOpnameNote}
-                      onChange={e => setGlobalOpnameNote(e.target.value)}
-                      className="bg-slate-800 border border-slate-700 text-white px-3 py-1.5 rounded-xl text-xs w-72 focus:outline-none"
-                    />
+                <div className="flex items-center justify-between gap-4 flex-wrap bg-slate-900 text-white p-4 rounded-2xl shadow-md">
+                  <div className="flex items-center gap-6 flex-wrap text-sm">
+                    <div>
+                       <span className="text-slate-400 block font-bold uppercase text-xs">Catatan Global Opnam</span>
+                      <input
+                        type="text"
+                        value={globalOpnameNote}
+                        onChange={e => setGlobalOpnameNote(e.target.value)}
+                        className="bg-slate-800 border border-slate-700 text-white px-3 py-1.5 rounded-xl text-sm w-72 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                       <span className="text-slate-400 block font-bold uppercase text-xs">No. Batch (Opsional)</span>
+                      <input
+                        type="text"
+                        value={globalOpnameNoBatch}
+                        onChange={e => setGlobalOpnameNoBatch(e.target.value)}
+                        placeholder="cth. BATCH-2026-01"
+                        className="bg-slate-800 border border-slate-700 text-white px-3 py-1.5 rounded-xl text-sm w-52 font-mono focus:outline-none"
+                      />
+                    </div>
                   </div>
 
                   <button
                     type="submit"
-                    className="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold rounded-xl text-xs shadow-xs transition-colors flex items-center gap-2"
+                    className="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold rounded-xl text-sm shadow-xs transition-colors flex items-center gap-2"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     Proses Penyesuaian Stok Opnam
@@ -2438,6 +2623,7 @@ export const StockInView: React.FC = () => {
                     <tr>
                       <th className="py-2.5 px-3">Waktu & Petugas</th>
                       <th className="py-2.5 px-3">Kode & Nama Obat</th>
+                      <th className="py-2.5 px-3">No. Batch</th>
                       <th className="py-2.5 px-3 text-center">Status Perpajakan</th>
                       <th className="py-2.5 px-3 text-center">Selisih</th>
                       <th className="py-2.5 px-3 text-center">Stok (Sebelum → Sesudah)</th>
@@ -2447,7 +2633,7 @@ export const StockInView: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {paginatedOpnameHistory.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-8 text-center text-slate-400">
+                        <td colSpan={7} className="py-8 text-center text-slate-400">
                           Belum ada riwayat penyesuaian opnam yang sesuai filter.
                         </td>
                       </tr>
@@ -2465,6 +2651,7 @@ export const StockInView: React.FC = () => {
                               <span className="font-mono text-[10px] text-slate-400 block">{sh.medicineCode}</span>
                               <span className="font-bold text-slate-900">{sh.medicineName}</span>
                             </td>
+                            <td className="py-2.5 px-3 text-slate-500">{sh.noBatch || '-'}</td>
                             <td className="py-2.5 px-3 text-center">
                               <span
                                 className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded border ${
@@ -2483,7 +2670,7 @@ export const StockInView: React.FC = () => {
                                 </span>
                               ) : (
                                 <span className="text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                                  {sh.amount}
+                                  {sh.inputQty !== undefined && sh.inputUnit ? `${sh.inputQty} ${sh.inputUnit} (${sh.amount} Pcs dasar)` : `${sh.amount} Pcs dasar`}
                                 </span>
                               )}
                             </td>
@@ -2520,8 +2707,8 @@ export const StockInView: React.FC = () => {
               <AlertTriangle className="w-6 h-6 shrink-0" />
               <div>
                 <h3 className="font-bold text-slate-900 text-base">Konfirmasi Penyesuaian Stok Opnam</h3>
-                <p className="text-xs text-slate-500">
-                  Terdapat {opnameConfirmModal.itemsToAdjust.length} sediaan obat yang mengalami selisih stok fisik.
+                   <p className="text-xs text-slate-500">
+                   Terdapat {opnameConfirmModal.itemsToAdjust.length} sediaan obat yang mengalami selisih stok fisik.
                 </p>
               </div>
             </div>
@@ -2574,10 +2761,10 @@ export const StockInView: React.FC = () => {
           </div>
         </div>
       )}
-      {/* MODAL: TAMBAH ITEM BARU (+ AUTO MARGIN & BHP) */}
+      {/* MODAL: TAMBAH ITEM BARU (harga manual; HPP/BHP/margin tetap 0) */}
       {isNewItemModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl p-6 space-y-5 animate-fade-in my-8">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-white rounded-3xl max-w-none w-full border border-slate-200 shadow-2xl p-6 space-y-5 animate-fade-in my-8 max-h-[calc(100vh-2rem)] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-slate-100 pb-4">
               <div className="flex items-center gap-3">
                 <div className={`p-2.5 rounded-2xl text-white ${newItemType === 'obat' ? 'bg-emerald-600' : 'bg-purple-600'}`}>
@@ -2587,8 +2774,8 @@ export const StockInView: React.FC = () => {
                   <h3 className="text-lg font-extrabold text-slate-900">
                     Tambah {newItemType === 'obat' ? 'Obat Baru' : 'Barang Non-Obat Baru'}
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    Atur data produk baru dan penetapan harga jual kasir.
+                   <p className="text-sm text-slate-500">
+                     Atur data produk baru dan penetapan harga jual kasir.
                   </p>
                 </div>
               </div>
@@ -2601,7 +2788,7 @@ export const StockInView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleCreateNewItemSubmit} className="space-y-4 text-xs">
+            <form onSubmit={handleCreateNewItemSubmit} className="space-y-4 text-sm">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Kode Item *</label>
@@ -2658,30 +2845,14 @@ export const StockInView: React.FC = () => {
                   <label className="block font-bold text-slate-700 mb-1">Satuan</label>
                   <select
                     value={newItemUnit}
-                    onChange={e => setNewItemUnit(e.target.value)}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs"
+                    onChange={e => {
+                      const nextUnit = e.target.value;
+                      setNewItemUnit(nextUnit);
+                      setNewUnitRows(rows => synchronizePrimaryUnit(rows, nextUnit));
+                    }}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
                   >
-                    <option value="Strip">Strip</option>
-                    <option value="Botol">Botol</option>
-                    <option value="Tube">Tube</option>
-                    <option value="Box">Box</option>
-                    <option value="Tablet">Tablet</option>
-                    <option value="Blister">Blister</option>
-                    <option value="Pcs">Pcs</option>
-                    <option value="Ampul">Ampul</option>
-                    <option value="Sachet">Sachet</option>
-                    <option value="Dus">Dus</option>
-                    <option value="Pack">Pack</option>
-                    <option value="Lusin">Lusin</option>
-                    <option value="Vial">Vial</option>
-                    <option value="Kapsul">Kapsul</option>
-                    <option value="Suppositoria">Suppositoria</option>
-                    <option value="Syringe">Syringe</option>
-                    <option value="Pasang">Pasang</option>
-                    <option value="Set">Set</option>
-                    <option value="Roll">Roll</option>
-                    <option value="Galon">Galon</option>
-                    <option value="Bag">Bag</option>
+                    {AVAILABLE_UNITS.map(option => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </div>
 
@@ -2691,6 +2862,17 @@ export const StockInView: React.FC = () => {
                     type="text"
                     value={newItemLocation}
                     onChange={e => setNewItemLocation(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">No. Batch (Opsional)</label>
+                  <input
+                    type="text"
+                    value={newItemNoBatch}
+                    onChange={e => setNewItemNoBatch(e.target.value)}
+                    placeholder="cth. BATCH-2026-01"
                     className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
@@ -2706,6 +2888,7 @@ export const StockInView: React.FC = () => {
                     onChange={e => setNewItemStock(Number(e.target.value))}
                     className="w-full border border-slate-200 rounded-xl px-3 py-2 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
+                   <p className="mt-1 text-xs text-slate-500">Stok awal (satuan dasar): {newItemStock} Pcs dasar.</p>
                 </div>
 
                 <div>
@@ -2730,25 +2913,67 @@ export const StockInView: React.FC = () => {
                 </div>
               </div>
 
-              {/* HARGA JUAL KASIR SECTION */}
-              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
-                <h4 className="font-extrabold text-slate-800 text-xs flex items-center gap-2">
-                  <Calculator className="w-4 h-4 text-emerald-600" />
-                  Penetapan Harga Jual Kasir (Rp) *
-                </h4>
-
-                <div>
-                  <input
-                    type="number"
-                    min="0"
-                    required
-                    value={newItemSellingPrice}
-                    onChange={e => setNewItemSellingPrice(Number(e.target.value))}
-                    placeholder="cth. 12000"
-                    className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                <label className="block font-extrabold text-emerald-950 mb-1">Harga Jual Normal *</label>
+                <input
+                  type="number"
+                  min="0"
+                  required
+                  value={newItemSellingPrice}
+                  onChange={e => setNewItemSellingPrice(Math.max(0, Number(e.target.value) || 0))}
+                  className="w-full border border-emerald-300 rounded-xl px-3 py-2 font-black text-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                 <p className="mt-1 text-xs text-emerald-700">Harga total untuk 1 {newItemUnit || 'satuan utama'}. HPP internal item baru diisi otomatis oleh aplikasi.</p>
               </div>
+
+              <MedicineUnitEditor
+                units={newUnitRows}
+                customPrices={newCustomPrices}
+                normalCustomerPrices={newNormalCustomerPrices}
+                customers={customers}
+                 enableMarginPricing={false}
+                normalPrice={newItemSellingPrice}
+                onChange={rows => {
+                  setNewUnitRows(rows);
+                  const primary = rows[0];
+                  if (primary) {
+                    setNewItemUnit(primary.unit);
+                  }
+                }}
+                onCustomPricesChange={setNewCustomPrices}
+                onNormalCustomerPricesChange={setNewNormalCustomerPrices}
+                onAddCustomer={() => quickAddStockCustomer('new')}
+              />
+
+              {false && (
+              <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl space-y-2">
+                <h4 className="font-extrabold text-slate-800 text-sm">Harga Jual Berdasarkan Customer (Opsional)</h4>
+                {pendingNewCustomerPrices.length > 0 && (
+                  <div className="space-y-1">
+                    {pendingNewCustomerPrices.map(cp => {
+                      const customer = customers.find(c => c.id === cp.customerId);
+                      return <div key={`${cp.customerId}-${cp.unitId || 'default'}`} className="flex items-center justify-between bg-white p-2 rounded-xl border border-amber-200 text-sm">
+                        <span className="font-bold">{customer?.name || 'Customer'} <span className="text-slate-500">({formatRupiah(cp.price)})</span></span>
+                        <button type="button" onClick={() => setPendingNewCustomerPrices(prev => prev.filter(p => !(p.customerId === cp.customerId && p.unitId === cp.unitId)))} className="text-rose-500 font-bold">Hapus</button>
+                      </div>;
+                    })}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <select value={newCustomerPriceCustomerId} onChange={e => setNewCustomerPriceCustomerId(e.target.value)} className="flex-1 border border-indigo-200 rounded-xl px-3 py-2 font-bold">
+                    <option value="">-- Tanpa Harga Customer --</option>
+                    {customers.filter(c => c.status === 'Aktif').map(c => {
+                      const duplicate = pendingNewCustomerPrices.some(p => p.customerId === c.id);
+                      return <option key={c.id} value={c.id} disabled={duplicate}>{c.name} ({c.memberNo}){duplicate ? ' — sudah ada harga' : ''}</option>;
+                    })}
+                  </select>
+                  <button type="button" onClick={() => quickAddStockCustomer('new')} className="px-3 rounded-xl bg-indigo-100 text-indigo-700 font-bold">+ Customer</button>
+                  <input type="number" min="0" value={newCustomerPrice} onChange={e => setNewCustomerPrice(Number(e.target.value))} placeholder="Harga khusus" className="w-32 border border-indigo-200 rounded-xl px-3 py-2 font-bold" />
+                  <button type="button" onClick={() => addPendingCustomerPrice('new')} disabled={!newCustomerPriceCustomerId || newCustomerPrice <= 0} className="px-3 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-50">Tambah</button>
+                </div>
+                 <p className="text-xs text-slate-500">Kosongkan customer untuk memakai harga umum saja.</p>
+              </div>
+              )}
 
               <div className="flex items-center gap-3 pt-2 justify-between">
                 <label className="flex items-center gap-2 font-bold text-slate-700 cursor-pointer">
@@ -2765,13 +2990,13 @@ export const StockInView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setIsNewItemModalOpen(false)}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors"
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-colors"
                   >
                     Batal
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs transition-all shadow-md flex items-center gap-1.5"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-sm transition-all shadow-md flex items-center gap-1.5"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     Simpan Item Baru
@@ -2787,8 +3012,8 @@ export const StockInView: React.FC = () => {
       {/* MODAL DIALOG INPUT STOK MASUK BARU */}
       {/* ========================================================================= */}
       {isRestockModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-100 space-y-5 my-8">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto overscroll-contain animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-none w-full p-6 shadow-2xl border border-slate-100 space-y-5 my-8 max-h-[calc(100vh-2rem)] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div className="flex items-center gap-3">
                 <div className={`p-3 rounded-2xl ${modalItemType === 'obat' ? 'bg-emerald-100 text-emerald-800' : 'bg-purple-100 text-purple-800'}`}>
@@ -2798,7 +3023,7 @@ export const StockInView: React.FC = () => {
                   <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
                     Input Stok Masuk Baru ({modalItemType === 'obat' ? 'Sediaan Obat' : 'Non-Obat / Alkes'})
                   </h3>
-                  <p className="text-xs text-slate-500">
+                   <p className="text-sm text-slate-500">
                     Form penerimaan stok barang masuk, klasifikasi PPN, dan perhitungan margin laba kotor.
                   </p>
                 </div>
@@ -2813,7 +3038,7 @@ export const StockInView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleRestockModalSubmit} noValidate className="space-y-4 text-xs">
+            <form onSubmit={handleRestockModalSubmit} noValidate className="space-y-4 text-sm">
               {/* Type Switcher */}
               <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
                 <button
@@ -2825,7 +3050,7 @@ export const StockInView: React.FC = () => {
                       handleModalMedSelect(firstMed.id);
                     }
                   }}
-                  className={`flex-1 py-2 rounded-lg font-extrabold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2 rounded-lg font-extrabold text-sm transition-all flex items-center justify-center gap-1.5 ${
                     modalItemType === 'obat' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -2840,7 +3065,7 @@ export const StockInView: React.FC = () => {
                       handleModalMedSelect(firstNonMed.id);
                     }
                   }}
-                  className={`flex-1 py-2 rounded-lg font-extrabold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2 rounded-lg font-extrabold text-sm transition-all flex items-center justify-center gap-1.5 ${
                     modalItemType === 'non_obat' ? 'bg-purple-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -2856,7 +3081,7 @@ export const StockInView: React.FC = () => {
                 <select
                   value={modalMedId}
                   onChange={e => handleModalMedSelect(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
                 >
                   <option key="" value="">-- Pilih Sediaan Barang --</option>
                   {medicines
@@ -2878,7 +3103,7 @@ export const StockInView: React.FC = () => {
 
                       return (
                         <option key={m.id} value={m.id}>
-                          {m.name} ({m.code}) — Margin: {itemMargin}% | Stok: {formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}
+                          {m.name} ({m.code}) — Margin: {itemMargin}% | Stok: {formatStockDisplay(m.stock, m.unit, m.unitMultiplier, m.units)}
                         </option>
                       );
                     })}
@@ -2914,6 +3139,17 @@ export const StockInView: React.FC = () => {
                     className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-mono font-bold focus:outline-none focus:border-emerald-500"
                   />
                 </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">No. Batch (Opsional)</label>
+                  <input
+                    type="text"
+                    value={modalNoBatch}
+                    onChange={e => setModalNoBatch(e.target.value)}
+                    placeholder="cth. BATCH-2026-01"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-mono font-bold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
               </div>
 
               {/* Qty, Unit, Expired Date */}
@@ -2934,17 +3170,11 @@ export const StockInView: React.FC = () => {
                   <label className="block font-bold text-slate-700 mb-1">Satuan</label>
                   <select
                     value={modalUnit}
-                    onChange={e => setModalUnit(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                    onChange={e => handleModalUnitChange(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-sm"
                   >
-                    {[
-                      'Strip', 'Botol', 'Tube', 'Box', 'Tablet', 'Blister', 'Pcs',
-                      'Ampul', 'Sachet', 'Dus', 'Pack', 'Lusin', 'Vial',
-                      'Kapsul', 'Suppositoria', 'Syringe', 'Pasang', 'Set', 'Roll', 'Galon', 'Bag'
-                    ].concat(modalUnit && !['Strip', 'Botol', 'Tube', 'Box', 'Tablet', 'Blister', 'Pcs', 'Ampul', 'Sachet', 'Dus', 'Pack', 'Lusin', 'Vial', 'Kapsul', 'Suppositoria', 'Syringe', 'Pasang', 'Set', 'Roll', 'Galon', 'Bag'].includes(modalUnit) ? [modalUnit] : []).map(u => (
-                      <option key={u} value={u}>
-                        {u}
-                      </option>
+                    {(modalUnitRows.length ? modalUnitRows.map(row => row.unit) : AVAILABLE_UNITS).map(u => (
+                      <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
                 </div>
@@ -2959,22 +3189,25 @@ export const StockInView: React.FC = () => {
                   />
                 </div>
               </div>
+               <p className="rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-800">
+                Jumlah masuk: {modalQty} {modalUnit || 'Pcs'}. Konversi stok: {modalQty} × {modalUnitRows.find(row => row.unit === modalUnit)?.multiplierToBase || 1} = {modalQty * (modalUnitRows.find(row => row.unit === modalUnit)?.multiplierToBase || 1)} Pcs dasar.
+              </p>
 
-              {/* Tax Type & Prices (HPP, BHP, Margin, Harga Jual Auto-Sync) */}
+              {/* Tax Type & Prices (HPP, BHP, Harga Jual Auto-Sync) */}
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3.5">
                 <div className="flex items-center justify-between">
                   <label className="font-extrabold text-slate-800">Status Perpajakan Faktur</label>
                   <select
                     value={modalTaxType}
                     onChange={e => setModalTaxType(e.target.value as 'PPN' | 'NON_PPN')}
-                    className="bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-extrabold text-xs text-indigo-950 focus:outline-none focus:border-indigo-500 shadow-2xs cursor-pointer"
+                    className="bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-extrabold text-sm text-indigo-950 focus:outline-none focus:border-indigo-500 shadow-2xs cursor-pointer"
                   >
                     <option value="PPN">🏷️ Faktur PPN 11% Included</option>
                     <option value="NON_PPN">📦 Nota Non-PPN (Bebas Pajak)</option>
                   </select>
                 </div>
 
-                {/* 4 Inputs Grid */}
+                {/* HPP, BHP, dan harga normal */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">
@@ -2986,9 +3219,9 @@ export const StockInView: React.FC = () => {
                       
                       value={modalPurchasePrice}
                       onChange={e => handleModalPurchasePriceChange(Number(e.target.value))}
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 font-bold text-slate-900 focus:outline-none focus:border-emerald-500 text-xs"
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 font-bold text-slate-900 focus:outline-none focus:border-emerald-500 text-sm"
                     />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                     <span className="text-xs text-slate-400 mt-0.5 block font-mono">
                       {formatRupiah(modalPurchasePrice)}
                     </span>
                   </div>
@@ -3003,35 +3236,32 @@ export const StockInView: React.FC = () => {
                       value={modalBhpAmount}
                       onChange={e => handleModalBhpAmountChange(Number(e.target.value))}
                       placeholder="0"
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 font-bold text-amber-900 focus:outline-none focus:border-amber-500 text-xs"
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 font-bold text-amber-900 focus:outline-none focus:border-amber-500 text-sm"
                     />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                     <span className="text-xs text-slate-400 mt-0.5 block font-mono">
                       {formatRupiah(modalBhpAmount)}
                     </span>
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                      <span>Margin Laba (%)</span>
-                      <span className="text-[9px] bg-emerald-100 text-emerald-800 font-extrabold px-1.5 py-0.2 rounded">Auto</span>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Margin harga normal (%)
                     </label>
                     <input
                       type="number"
+                      min="0"
                       step="0.5"
-                      
                       value={modalMarginPct}
-                      onChange={e => handleModalMarginPctChange(Number(e.target.value))}
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-emerald-400 font-black text-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 text-xs"
+                      onChange={e => handleModalMarginChange(Number(e.target.value))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 font-bold text-slate-900 focus:outline-none focus:border-emerald-500 text-sm"
                     />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block font-medium">
-                      Margin {modalMarginPct}%
-                    </span>
                   </div>
 
                   <div>
                     <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
-                      <span>Harga Jual (Rp/Unit)</span>
-                      <span className="text-[9px] bg-indigo-100 text-indigo-800 font-extrabold px-1.5 py-0.2 rounded">Sinkron</span>
+                      <span>Harga Jual Normal (Total / Satuan Utama)</span>
+                       <span className="text-xs bg-indigo-100 text-indigo-800 font-extrabold px-1.5 py-0.2 rounded">Sinkron</span>
                     </label>
                     <input
                       type="number"
@@ -3039,9 +3269,9 @@ export const StockInView: React.FC = () => {
                       
                       value={modalSellingPrice}
                       onChange={e => handleModalSellingPriceChange(Number(e.target.value))}
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-indigo-300 font-extrabold text-indigo-900 focus:outline-none focus:border-indigo-500 text-xs"
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-indigo-300 font-extrabold text-indigo-900 focus:outline-none focus:border-indigo-500 text-sm"
                     />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                     <span className="text-xs text-slate-400 mt-0.5 block font-mono">
                       {formatRupiah(modalSellingPrice)}
                     </span>
                   </div>
@@ -3057,35 +3287,34 @@ export const StockInView: React.FC = () => {
                   const dppBeli = isPpn ? Math.round(hpp / 1.11) : hpp;
                   const ppnVal = isPpn ? hpp - dppBeli : 0;
                   const profitUnit = sell - totalCost;
-                  const marginPct = sell > 0 ? Math.round((profitUnit / sell) * 10000) / 100 : 0;
-                  const markupPct = totalCost > 0 ? Math.round((profitUnit / totalCost) * 10000) / 100 : 0;
+                  const marginPct = modalMarginPct;
                   const totalProfitBatch = profitUnit * modalQty;
 
                   return (
                     <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-3.5 rounded-xl space-y-1.5 border border-slate-800 shadow-inner">
-                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-300">
+                       <div className="flex items-center justify-between text-xs font-bold text-emerald-300">
                         <span>⚡ Perhitungan Modal & Harga Jual Auto-Sinkron:</span>
                         <span className="text-amber-300 font-extrabold">Est. Total Profit Batch: {formatRupiah(totalProfitBatch)}</span>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] pt-1 border-t border-slate-800">
+                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs pt-1 border-t border-slate-800">
                         <div>
-                          <span className="text-slate-400 block text-[9px]">Total Modal (HPP+BHP):</span>
+                           <span className="text-slate-400 block text-xs">Total Modal (HPP+BHP):</span>
                           <span className="font-extrabold text-amber-300">{formatRupiah(totalCost)}</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px]">DPP Beli (Excl PPN):</span>
+                           <span className="text-slate-400 block text-xs">DPP Beli (Excl PPN):</span>
                           <span className="font-mono text-white">{formatRupiah(dppBeli)}</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px]">PPN Masukan (11%):</span>
+                           <span className="text-slate-400 block text-xs">PPN Masukan (11%):</span>
                           <span className="font-mono text-blue-300">{formatRupiah(ppnVal)}</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px]">Margin Laba:</span>
+                           <span className="text-slate-400 block text-xs">Margin Laba:</span>
                           <span className="font-black text-emerald-400">{marginPct}%</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px]">Profit per Unit:</span>
+                           <span className="text-slate-400 block text-xs">Profit per Unit:</span>
                           <span className={`font-extrabold ${profitUnit >= 0 ? 'text-emerald-300' : 'text-rose-400'}`}>
                             {formatRupiah(profitUnit)}
                           </span>
@@ -3095,6 +3324,70 @@ export const StockInView: React.FC = () => {
                   );
                 })()}
               </div>
+
+              {modalUnitRows.length > 0 && (
+                <MedicineUnitEditor
+                  units={modalUnitRows}
+                  customPrices={modalCustomPrices}
+                  normalCustomerPrices={modalNormalCustomerPrices}
+                  customers={customers}
+                   enableMarginPricing
+                   normalPrice={modalSellingPrice}
+                   normalMarginPct={modalMarginPct}
+                   normalBhpAmount={modalBhpAmount}
+                   purchasePricePerBase={modalPurchasePrice}
+                     onChange={rows => {
+                     const normalizedRows = normalizeMedicineUnits(rows);
+                     const primary = normalizedRows[0];
+                     setModalUnitRows(synchronizeUnitPurchasePrices(normalizedRows, modalPurchasePrice));
+                      if (primary && !normalizedRows.some(row => row.unit === modalUnit)) setModalUnit(primary.unit);
+                   }}
+                  onCustomPricesChange={setModalCustomPrices}
+                  onNormalCustomerPricesChange={setModalNormalCustomerPrices}
+                  onAddCustomer={() => quickAddStockCustomer('restock')}
+                />
+              )}
+
+              {false && (
+              <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl space-y-2">
+                <h4 className="font-extrabold text-slate-800 text-sm">Harga Jual Berdasarkan Customer (Opsional)</h4>
+                {medicineCustomerPrices.filter(p => p.medicineId === modalMedId).length > 0 && (
+                  <div className="space-y-1">
+                    {medicineCustomerPrices.filter(p => p.medicineId === modalMedId).map(cp => {
+                      const customer = customers.find(c => c.id === cp.customerId);
+                      return <div key={cp.id} className="flex items-center justify-between bg-white p-2 rounded-xl border border-slate-200 text-sm">
+                        <span className="font-bold">{customer?.name || 'Customer'} <span className="text-slate-500">({formatRupiah(cp.price)})</span></span>
+                        <span className="text-slate-400">Tersimpan</span>
+                      </div>;
+                    })}
+                  </div>
+                )}
+                {pendingModalCustomerPrices.length > 0 && (
+                  <div className="space-y-1">
+                    {pendingModalCustomerPrices.map(cp => {
+                      const customer = customers.find(c => c.id === cp.customerId);
+                      return <div key={`${cp.customerId}-${cp.unitId || 'default'}`} className="flex items-center justify-between bg-white p-2 rounded-xl border border-amber-200 text-sm">
+                        <span className="font-bold">{customer?.name || 'Customer'} <span className="text-slate-500">({formatRupiah(cp.price)})</span></span>
+                        <button type="button" onClick={() => setPendingModalCustomerPrices(prev => prev.filter(p => !(p.customerId === cp.customerId && p.unitId === cp.unitId)))} className="text-rose-500 font-bold">Hapus</button>
+                      </div>;
+                    })}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <select value={modalCustomerPriceCustomerId} onChange={e => setModalCustomerPriceCustomerId(e.target.value)} className="flex-1 bg-white border border-indigo-200 rounded-xl px-3 py-2 font-bold">
+                    <option value="">-- Tanpa Harga Customer --</option>
+                    {customers.filter(c => c.status === 'Aktif').map(c => {
+                      const duplicate = medicineCustomerPrices.some(p => p.medicineId === modalMedId && p.customerId === c.id) || pendingModalCustomerPrices.some(p => p.customerId === c.id);
+                      return <option key={c.id} value={c.id} disabled={duplicate}>{c.name} ({c.memberNo}){duplicate ? ' — sudah ada harga' : ''}</option>;
+                    })}
+                  </select>
+                  <button type="button" onClick={() => quickAddStockCustomer('restock')} className="px-3 rounded-xl bg-indigo-100 text-indigo-700 font-bold">+ Customer</button>
+                  <input type="number" min="0" value={modalCustomerPrice} onChange={e => setModalCustomerPrice(Number(e.target.value))} placeholder="Harga khusus" className="w-32 bg-white border border-indigo-200 rounded-xl px-3 py-2 font-bold" />
+                  <button type="button" onClick={() => addPendingCustomerPrice('restock')} disabled={!modalCustomerPriceCustomerId || modalCustomerPrice <= 0} className="px-3 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-50">Tambah</button>
+                </div>
+                 <p className="text-xs text-slate-500">Opsional. Customer wajib dipilih jika harga khusus diisi.</p>
+              </div>
+              )}
 
               {/* Note */}
               <div>

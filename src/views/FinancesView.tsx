@@ -1,6 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { formatRupiah, formatDateTime, formatDate, getWIBDateString, formatStockDisplay } from '../utils/formatters';
+import logoImg from '../assets/logo.png';
+import { ReportExportActions } from '../components/ReportExportActions';
+import { InlineNotice } from '../components/InlineNotice';
+import { formatRupiah, formatDateTime, formatDate, formatTransactionCustomer, getWIBDateString, formatStockDisplay } from '../utils/formatters';
 import {
   WalletCards,
   TrendingUp,
@@ -30,6 +33,9 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { CashFlowType } from '../types';
+import { getPrimaryUnit, medicineBaseUnitName, transactionItemBaseDisplayLabel, transactionItemBaseQuantity, transactionItemCost, transactionItemDisplayLabel, transactionItemPackageLabel, transactionItemPriceTypeLabel, transactionItemSalePrice } from '../utils/unitConversion';
+import { buildAuditExportModel, loadAuditFilterState, updateAuditFilterState, type AuditBookDateRange, type AuditExportScope } from '../utils/reportExport';
+import { downloadAuditPdf } from '../utils/reportPdf';
 
 const PaginationControls = ({ currentPage, totalPages, onPageChange, totalItems, itemsPerPage }: { currentPage: number, totalPages: number, onPageChange: (p: number) => void, totalItems: number, itemsPerPage: number }) => {
   if (totalPages <= 1) return null;
@@ -61,17 +67,51 @@ const PaginationControls = ({ currentPage, totalPages, onPageChange, totalItems,
 export const FinancesView: React.FC = () => {
   const {
     medicines,
+    customers,
     doctors,
     transactions,
     cashFlows,
+    stockHistory,
     addCashFlow,
     deleteCashFlow,
     settings,
-    updateSettings
+    updateSettings,
+    currentUser,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'neraca' | 'laporan' | 'aruskas'>('neraca');
+  const savedAuditFilters = loadAuditFilterState();
+  const financeToday = getWIBDateString();
+  const financeFirstDay = `${financeToday.slice(0, 8)}01`;
+
+  const transactionLabels = useMemo(
+    () => new Map(transactions.map(transaction => [transaction.id, transaction.trxNo || transaction.id])),
+    [transactions]
+  );
+  const displayTransactionText = (text: string) => {
+    let displayed = text;
+    transactionLabels.forEach((label, id) => {
+      displayed = displayed.split(id).join(label);
+    });
+    return displayed;
+  };
+
+  const uniqueLabels = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
+  const getTransactionPriceTypeLabels = (transaction: (typeof transactions)[number]) => uniqueLabels(
+    transaction.items.map(item => transactionItemPriceTypeLabel(
+      item,
+      medicines.find(m => m.id === item.medicineId || m.name === item.medicineName),
+    )),
+  );
+  const getMedicineTransactions = (medicine: (typeof medicines)[number]) => transactions.filter(
+    transaction => transaction.status === 'Selesai' && transaction.items.some(
+      item => item.medicineId === medicine.id || item.medicineName === medicine.name,
+    ),
+  );
+
+  const [activeTab, setActiveTab] = useState<'neraca' | 'laporan' | 'aruskas'>(savedAuditFilters.finances.activeTab);
   const [deletingCashFlowId, setDeletingCashFlowId] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   
   // Balance Sheet Detail Modal State
   const [selectedBalanceDetail, setSelectedBalanceDetail] = useState<'kas' | 'persediaan' | 'modal' | 'laba' | null>(null);
@@ -79,15 +119,9 @@ export const FinancesView: React.FC = () => {
   const [initialCapitalInput, setInitialCapitalInput] = useState(String(settings.initialCapital ?? 50000000));
   
   // Date filter for reports
-  const [reportPeriod, setReportPeriod] = useState<'semua' | 'hari_ini' | 'kemarin' | 'bulan_ini' | 'bulan_lalu' | 'tahun_ini' | 'kustom'>('bulan_ini');
-  const [customStartDate, setCustomStartDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(1);
-    return d.toISOString().split('T')[0];
-  });
-  const [customEndDate, setCustomEndDate] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
-  });
+  const [reportPeriod, setReportPeriod] = useState<'semua' | 'hari_ini' | 'kemarin' | 'bulan_ini' | 'bulan_lalu' | 'tahun_ini' | 'kustom'>(savedAuditFilters.finances.reportPeriod as 'semua' | 'hari_ini' | 'kemarin' | 'bulan_ini' | 'bulan_lalu' | 'tahun_ini' | 'kustom');
+  const [customStartDate, setCustomStartDate] = useState<string>(savedAuditFilters.finances.customStartDate || financeFirstDay);
+  const [customEndDate, setCustomEndDate] = useState<string>(savedAuditFilters.finances.customEndDate || financeToday);
 
   // Laba Rugi Detail Modal & Print Modal State
   const [selectedIncomeDetail, setSelectedIncomeDetail] = useState<'penjualan' | 'hpp' | 'beban' | 'pemasukan_lain' | 'laba_bersih' | null>(null);
@@ -100,11 +134,11 @@ export const FinancesView: React.FC = () => {
   const [cashFlowAmount, setCashFlowAmount] = useState('');
   const [cashFlowNote, setCashFlowNote] = useState('');
   
-  const [cashFlowSearch, setCashFlowSearch] = useState('');
-  const [cashFlowTypeFilter, setCashFlowTypeFilter] = useState<'Semua' | CashFlowType>('Semua');
-  const [cashFlowDatePreset, setCashFlowDatePreset] = useState<'semua' | 'hari_ini' | '7_hari' | '30_hari' | 'bulan_ini' | 'kustom'>('semua');
-  const [cashFlowStartDate, setCashFlowStartDate] = useState<string>(() => getWIBDateString());
-  const [cashFlowEndDate, setCashFlowEndDate] = useState<string>(() => getWIBDateString());
+  const [cashFlowSearch, setCashFlowSearch] = useState(savedAuditFilters.finances.cashFlowSearch);
+  const [cashFlowTypeFilter, setCashFlowTypeFilter] = useState<'Semua' | CashFlowType>(savedAuditFilters.finances.cashFlowTypeFilter as 'Semua' | CashFlowType);
+  const [cashFlowDatePreset, setCashFlowDatePreset] = useState<'semua' | 'hari_ini' | '7_hari' | '30_hari' | 'bulan_ini' | 'kustom'>(savedAuditFilters.finances.cashFlowDatePreset as 'semua' | 'hari_ini' | '7_hari' | '30_hari' | 'bulan_ini' | 'kustom');
+  const [cashFlowStartDate, setCashFlowStartDate] = useState<string>(savedAuditFilters.finances.cashFlowStartDate || getWIBDateString());
+  const [cashFlowEndDate, setCashFlowEndDate] = useState<string>(savedAuditFilters.finances.cashFlowEndDate || getWIBDateString());
 
   // Pagination States
   const [arusKasPage, setArusKasPage] = useState(1);
@@ -150,8 +184,7 @@ export const FinancesView: React.FC = () => {
 
   // Helper functions for dual-track split calculation (Obat vs Non-Obat)
   const getTrxObatTotal = (t: any) => {
-    if (t.obatTotalAmount !== undefined) return t.obatTotalAmount;
-    return t.items
+    return (t.items || [])
       .filter((i: any) => {
         const med = medicines.find(m => m.id === i.medicineId);
         return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
@@ -160,8 +193,7 @@ export const FinancesView: React.FC = () => {
   };
 
   const getTrxNonObatTotal = (t: any) => {
-    if (t.nonObatTotalAmount !== undefined) return t.nonObatTotalAmount;
-    return t.items
+    return (t.items || [])
       .filter((i: any) => {
         const med = medicines.find(m => m.id === i.medicineId);
         return (i.itemType || med?.itemType) === 'non_obat';
@@ -170,38 +202,26 @@ export const FinancesView: React.FC = () => {
   };
 
   const getTrxObatCost = (t: any) => {
-    if (t.obatCostAmount !== undefined) return t.obatCostAmount;
-    return t.items
+    return (t.items || [])
       .filter((i: any) => {
         const med = medicines.find(m => m.id === i.medicineId);
         return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
       })
       .reduce((sum: number, i: any) => {
         const med = medicines.find(m => m.id === i.medicineId);
-        const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
-        const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
-        const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
-        const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
-        const qtyPcs = i.qty * itemMult;
-        return sum + Math.round(costPerPcs * qtyPcs);
+        return sum + transactionItemCost(i, med);
       }, 0);
   };
 
   const getTrxNonObatCost = (t: any) => {
-    if (t.nonObatCostAmount !== undefined) return t.nonObatCostAmount;
-    return t.items
+    return (t.items || [])
       .filter((i: any) => {
         const med = medicines.find(m => m.id === i.medicineId);
         return (i.itemType || med?.itemType) === 'non_obat';
       })
       .reduce((sum: number, i: any) => {
         const med = medicines.find(m => m.id === i.medicineId);
-        const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
-        const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
-        const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
-        const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
-        const qtyPcs = i.qty * itemMult;
-        return sum + Math.round(costPerPcs * qtyPcs);
+        return sum + transactionItemCost(i, med);
       }, 0);
   };
 
@@ -240,17 +260,17 @@ export const FinancesView: React.FC = () => {
     const totalValuasiStok = medicines
       .filter(m => (m.itemType || 'obat') === 'obat')
       .reduce((sum, m) => {
-        const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
-        const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
-        return sum + Math.round(m.stock * costPerPcs);
+        const primary = getPrimaryUnit(m);
+        const purchasePerBase = primary?.purchasePricePerBase ?? ((m.purchasePrice || 0) / (m.unitMultiplier || 1));
+        return sum + Math.round(m.stock * purchasePerBase);
       }, 0);
 
     const totalValuasiStokNonObat = medicines
       .filter(m => m.itemType === 'non_obat')
       .reduce((sum, m) => {
-        const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
-        const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
-        return sum + Math.round(m.stock * costPerPcs);
+        const primary = getPrimaryUnit(m);
+        const purchasePerBase = primary?.purchasePricePerBase ?? ((m.purchasePrice || 0) / (m.unitMultiplier || 1));
+        return sum + Math.round(m.stock * purchasePerBase);
       }, 0);
 
     // 1. Kas & Setara Kas murni dari Modal Awal + Penjualan Obat + Pemasukan - Pengeluaran
@@ -337,68 +357,14 @@ export const FinancesView: React.FC = () => {
     });
 
     // Calculate Pendapatan (Penjualan)
-    const totalPenjualanObat = filteredTransactions.reduce((sum, trx) => {
-      if (trx.obatTotalAmount !== undefined) return sum + trx.obatTotalAmount;
-      const obatVal = trx.items
-        .filter((i: any) => {
-          const med = medicines.find(m => m.id === i.medicineId);
-          return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
-        })
-        .reduce((s: number, i: any) => s + i.subtotal, 0);
-      return sum + obatVal;
-    }, 0);
-
-    const totalPenjualanNonObat = filteredTransactions.reduce((sum, trx) => {
-      if (trx.nonObatTotalAmount !== undefined) return sum + trx.nonObatTotalAmount;
-      const nonObatVal = trx.items
-        .filter((i: any) => {
-          const med = medicines.find(m => m.id === i.medicineId);
-          return (i.itemType || med?.itemType) === 'non_obat';
-        })
-        .reduce((s: number, i: any) => s + i.subtotal, 0);
-      return sum + nonObatVal;
-    }, 0);
+    const totalPenjualanObat = filteredTransactions.reduce((sum, trx) => sum + getTrxObatTotal(trx), 0);
+    const totalPenjualanNonObat = filteredTransactions.reduce((sum, trx) => sum + getTrxNonObatTotal(trx), 0);
 
     const totalPenjualan = totalPenjualanObat + totalPenjualanNonObat;
     
     // Calculate HPP
-    const totalHPPObat = filteredTransactions.reduce((sum, trx) => {
-      if (trx.obatCostAmount !== undefined && trx.obatCostAmount > 0) return sum + trx.obatCostAmount;
-      const obatCost = trx.items
-        .filter((i: any) => {
-          const med = medicines.find(m => m.id === i.medicineId);
-          return (i.itemType || med?.itemType || 'obat') !== 'non_obat';
-        })
-        .reduce((s: number, i: any) => {
-          const med = medicines.find(m => m.id === i.medicineId);
-          const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
-          const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
-          const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
-          const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
-          const qtyPcs = i.qty * itemMult;
-          return s + Math.round(costPerPcs * qtyPcs);
-        }, 0);
-      return sum + obatCost;
-    }, 0);
-
-    const totalHPPNonObat = filteredTransactions.reduce((sum, trx) => {
-      if (trx.nonObatCostAmount !== undefined && trx.nonObatCostAmount > 0) return sum + trx.nonObatCostAmount;
-      const nonObatCost = trx.items
-        .filter((i: any) => {
-          const med = medicines.find(m => m.id === i.medicineId);
-          return (i.itemType || med?.itemType) === 'non_obat';
-        })
-        .reduce((s: number, i: any) => {
-          const med = medicines.find(m => m.id === i.medicineId);
-          const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
-          const itemMult = i.unit === 'Lusin' ? 12 : (i.unitMultiplier || masterMult);
-          const purPrice = i.purchasePrice ?? med?.purchasePrice ?? Math.round(i.price * 0.7);
-          const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
-          const qtyPcs = i.qty * itemMult;
-          return s + Math.round(costPerPcs * qtyPcs);
-        }, 0);
-      return sum + nonObatCost;
-    }, 0);
+    const totalHPPObat = filteredTransactions.reduce((sum, trx) => sum + getTrxObatCost(trx), 0);
+    const totalHPPNonObat = filteredTransactions.reduce((sum, trx) => sum + getTrxNonObatCost(trx), 0);
 
     const totalHPP = totalHPPObat + totalHPPNonObat;
 
@@ -448,31 +414,34 @@ export const FinancesView: React.FC = () => {
     const opexRatioPct = totalPenjualan > 0 ? (totalBebanOperasional / totalPenjualan) * 100 : 0;
 
     // Medicine Profitability (Top medicines sold in period)
-    const medProfitMap: { [medId: string]: { id: string; name: string; qty: number; sales: number; hpp: number; profit: number } } = {};
+    const medProfitMap: { [packageKey: string]: { id: string; name: string; packageLabel: string; displayLabel: string; baseQuantity: number; baseUnit: string; qty: number; sales: number; hpp: number; profit: number; customerLabels: string[]; priceTypeLabels: string[] } } = {};
     filteredTransactions.forEach(trx => {
       trx.items.forEach(item => {
         const med = medicines.find(m => m.id === item.medicineId);
         const name = item.medicineName || med?.name || 'Obat';
-        const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
-        const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
-        const costPrice = item.purchasePrice ?? med?.purchasePrice ?? Math.round(item.price * 0.7);
-        const costPerPcs = masterMult > 1 ? costPrice / masterMult : costPrice;
-        const qtyPcs = item.qty * itemMult;
+        const packageLabel = transactionItemPackageLabel(item);
         const itemSales = item.subtotal;
-        const itemHPP = Math.round(costPerPcs * qtyPcs);
+        const itemHPP = transactionItemCost(item, med);
         const itemProfit = itemSales - itemHPP;
+        const packageKey = `${item.medicineId}|${packageLabel}|${transactionItemSalePrice(item)}`;
 
-        if (!medProfitMap[item.medicineId]) {
-          medProfitMap[item.medicineId] = { id: item.medicineId, name, qty: 0, sales: 0, hpp: 0, profit: 0 };
+        if (!medProfitMap[packageKey]) {
+          medProfitMap[packageKey] = { id: packageKey, name, packageLabel, displayLabel: transactionItemDisplayLabel(item), baseQuantity: 0, baseUnit: medicineBaseUnitName(med), qty: 0, sales: 0, hpp: 0, profit: 0, customerLabels: [], priceTypeLabels: [] };
         }
-        medProfitMap[item.medicineId].qty += item.qty;
-        medProfitMap[item.medicineId].sales += itemSales;
-        medProfitMap[item.medicineId].hpp += itemHPP;
-        medProfitMap[item.medicineId].profit += itemProfit;
+        medProfitMap[packageKey].qty += item.qty;
+        medProfitMap[packageKey].displayLabel = transactionItemDisplayLabel({ ...item, qty: medProfitMap[packageKey].qty });
+        medProfitMap[packageKey].baseQuantity += transactionItemBaseQuantity(item);
+        medProfitMap[packageKey].sales += itemSales;
+        medProfitMap[packageKey].hpp += itemHPP;
+        medProfitMap[packageKey].profit += itemProfit;
+        medProfitMap[packageKey].customerLabels = uniqueLabels([...medProfitMap[packageKey].customerLabels, formatTransactionCustomer(trx)]);
+        medProfitMap[packageKey].priceTypeLabels = uniqueLabels([...medProfitMap[packageKey].priceTypeLabels, transactionItemPriceTypeLabel(item, med)]);
       });
     });
 
     const medicineProfits = Object.values(medProfitMap).sort((a, b) => b.profit - a.profit);
+    const customerLabels = uniqueLabels(filteredTransactions.map(formatTransactionCustomer));
+    const priceTypeLabels = uniqueLabels(filteredTransactions.flatMap(getTransactionPriceTypeLabels));
 
     return {
       filteredTransactions,
@@ -483,6 +452,8 @@ export const FinancesView: React.FC = () => {
       otherIncomeByCategory,
       suntikanModalInPeriod,
       medicineProfits,
+      customerLabels,
+      priceTypeLabels,
       totalPenjualan,
       totalPenjualanObat,
       totalPenjualanNonObat,
@@ -580,6 +551,50 @@ export const FinancesView: React.FC = () => {
   // 8. Pemasukan Lainnya
   const paginatedOtherIncomeList = reportData.otherIncomeList.slice((modalPage - 1) * ITEMS_PER_PAGE, modalPage * ITEMS_PER_PAGE);
 
+  const financeFilterSnapshot = () => ({
+    activeTab,
+    reportPeriod,
+    customStartDate,
+    customEndDate,
+    cashFlowSearch,
+    cashFlowTypeFilter,
+    cashFlowDatePreset,
+    cashFlowStartDate,
+    cashFlowEndDate,
+  });
+
+  useEffect(() => {
+    updateAuditFilterState({ finances: financeFilterSnapshot() });
+  }, [activeTab, reportPeriod, customStartDate, customEndDate, cashFlowSearch, cashFlowTypeFilter, cashFlowDatePreset, cashFlowStartDate, cashFlowEndDate]);
+
+  const handleAuditExport = async (scope: Extract<AuditExportScope, 'finances' | 'audit-book'>, auditBookDateRange?: AuditBookDateRange) => {
+    setExportError(null);
+    setIsExporting(true);
+    try {
+      const filters = updateAuditFilterState({ finances: financeFilterSnapshot() });
+      const model = buildAuditExportModel({
+        scope,
+        auditBookDateRange,
+        financeTab: activeTab,
+        settings,
+        currentUser: currentUser || { name: 'Sistem', username: 'sistem', role: 'admin' },
+        transactions,
+        customers,
+        doctors,
+        medicines,
+        stockHistory,
+        cashFlows,
+        filters,
+      });
+      await downloadAuditPdf(model, logoImg);
+    } catch (error) {
+      console.error('Gagal membuat PDF finansial:', error);
+      setExportError('Export PDF gagal. Silakan coba lagi.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -593,7 +608,19 @@ export const FinancesView: React.FC = () => {
             Pantau posisi aset, kewajiban, modal, laporan laba rugi, dan arus kas apotek secara komprehensif.
           </p>
         </div>
+        <ReportExportActions
+          onExport={() => handleAuditExport('finances')}
+          onAuditBook={range => handleAuditExport('audit-book', range)}
+          isExporting={isExporting}
+        />
       </div>
+
+      {exportError && (
+        <InlineNotice
+          message={exportError}
+          onDismiss={() => setExportError(null)}
+        />
+      )}
 
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2">
@@ -1109,7 +1136,7 @@ export const FinancesView: React.FC = () => {
                       <div key={item.id || idx} className="py-2 flex justify-between items-center text-xs">
                         <div>
                           <p className="font-bold text-slate-800 truncate max-w-[180px]">{item.name}</p>
-                          <p className="text-[11px] text-slate-500">{item.qty} pcs terjual • Omset {formatRupiah(item.sales)}</p>
+                          <p className="text-[11px] text-slate-500">{item.displayLabel} terjual • Stok dasar: {item.baseQuantity} {item.baseUnit} • Omset {formatRupiah(item.sales)}</p>
                         </div>
                         <div className="text-right">
                           <p className="font-extrabold text-emerald-700">+{formatRupiah(item.profit)}</p>
@@ -1287,6 +1314,8 @@ export const FinancesView: React.FC = () => {
                     <th className="py-3 px-4 font-bold">Tipe & Kategori</th>
                     <th className="py-3 px-4 font-bold">Keterangan</th>
                     <th className="py-3 px-4 font-bold">Petugas</th>
+                    <th className="py-3 px-4 font-bold">Customer</th>
+                    <th className="py-3 px-4 font-bold">Jenis Harga</th>
                     <th className="py-3 px-4 font-bold text-right">Jumlah</th>
                     <th className="py-3 px-4 font-bold text-center w-16">Aksi</th>
                   </tr>
@@ -1294,7 +1323,7 @@ export const FinancesView: React.FC = () => {
                 <tbody className="divide-y divide-slate-100">
                   {filteredArusKas.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500">
+                      <td colSpan={8} className="py-8 text-center text-slate-500">
                         Tidak ada data arus kas.
                       </td>
                     </tr>
@@ -1312,8 +1341,10 @@ export const FinancesView: React.FC = () => {
                           </span>
                           <div className="text-slate-600 font-medium text-xs">{cf.category}</div>
                         </td>
-                        <td className="py-3 px-4 text-slate-800">{cf.note}</td>
+                        <td className="py-3 px-4 text-slate-800">{displayTransactionText(cf.note)}</td>
                         <td className="py-3 px-4 text-slate-600">{cf.recordedBy}</td>
+                        <td className="py-3 px-4 text-slate-400">-</td>
+                        <td className="py-3 px-4 text-slate-400">-</td>
                         <td className={`py-3 px-4 text-right font-extrabold ${cf.type === 'Pemasukan' ? 'text-emerald-600' : 'text-rose-600'}`}>
                           {cf.type === 'Pemasukan' ? '+' : '-'} {formatRupiah(cf.amount)}
                         </td>
@@ -1517,19 +1548,21 @@ export const FinancesView: React.FC = () => {
                           <tr>
                             <th className="py-2 px-3 font-bold">No. Transaksi / Waktu</th>
                             <th className="py-2 px-3 font-bold">Pelanggan</th>
+                            <th className="py-2 px-3 font-bold">Jenis Harga</th>
                             <th className="py-2 px-3 font-bold text-right">Penjualan Obat (Rp)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {paginatedKasPosTransactions.length === 0 ? (
-                            <tr><td colSpan={3} className="py-4 text-center text-slate-400">Tidak ada transaksi.</td></tr>
+                            <tr><td colSpan={4} className="py-4 text-center text-slate-400">Tidak ada transaksi.</td></tr>
                           ) : (
                             paginatedKasPosTransactions.map(t => {
                               const obatTotal = getTrxObatTotal(t);
                               return (
                                 <tr key={t.id} className="hover:bg-slate-50">
-                                  <td className="py-2 px-3 font-medium text-slate-700">{t.id} - {formatDateTime(t.date)}</td>
-                                  <td className="py-2 px-3 text-slate-600">{t.customerName || 'Umum'}</td>
+                                  <td className="py-2 px-3 font-medium text-slate-700">{transactionLabels.get(t.id) || t.id} - {formatDateTime(t.date)}</td>
+                                  <td className="py-2 px-3 text-slate-600">{formatTransactionCustomer(t)}</td>
+                                  <td className="py-2 px-3 text-slate-600">{getTransactionPriceTypeLabels(t).join(', ') || '-'}</td>
                                   <td className="py-2 px-3 text-right font-extrabold text-emerald-600">+{formatRupiah(obatTotal)}</td>
                                 </tr>
                               );
@@ -1556,12 +1589,14 @@ export const FinancesView: React.FC = () => {
                             <th className="py-2 px-3 font-bold">Tanggal</th>
                             <th className="py-2 px-3 font-bold">Tipe & Kategori</th>
                             <th className="py-2 px-3 font-bold">Keterangan</th>
+                            <th className="py-2 px-3 font-bold">Customer</th>
+                            <th className="py-2 px-3 font-bold">Jenis Harga</th>
                             <th className="py-2 px-3 font-bold text-right">Jumlah (Rp)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {paginatedCashFlows.length === 0 ? (
-                            <tr><td colSpan={4} className="py-4 text-center text-slate-400">Tidak ada catatan arus kas.</td></tr>
+                            <tr><td colSpan={6} className="py-4 text-center text-slate-400">Tidak ada catatan arus kas.</td></tr>
                           ) : (
                             paginatedCashFlows.map(cf => (
                               <tr key={cf.id} className="hover:bg-slate-50">
@@ -1571,7 +1606,9 @@ export const FinancesView: React.FC = () => {
                                     {cf.type} ({cf.category})
                                   </span>
                                 </td>
-                                <td className="py-2 px-3 text-slate-600">{cf.note}</td>
+                                 <td className="py-2 px-3 text-slate-600">{displayTransactionText(cf.note)}</td>
+                                 <td className="py-2 px-3 text-slate-400">-</td>
+                                 <td className="py-2 px-3 text-slate-400">-</td>
                                 <td className={`py-2 px-3 text-right font-extrabold ${cf.type === 'Pemasukan' ? 'text-emerald-600' : 'text-rose-600'}`}>
                                   {cf.type === 'Pemasukan' ? '+' : '-'} {formatRupiah(cf.amount)}
                                 </td>
@@ -1602,6 +1639,7 @@ export const FinancesView: React.FC = () => {
                       <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                         <tr>
                           <th className="py-2.5 px-3 font-bold">Nama Obat</th>
+                          <th className="py-2.5 px-3 font-bold">No. Batch</th>
                           <th className="py-2.5 px-3 font-bold">Kategori</th>
                           <th className="py-2.5 px-3 font-bold text-center">Stok</th>
                           <th className="py-2.5 px-3 font-bold text-right">Harga Beli (HPP)</th>
@@ -1610,17 +1648,22 @@ export const FinancesView: React.FC = () => {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {paginatedPersediaanObat.length === 0 ? (
-                          <tr><td colSpan={5} className="py-6 text-center text-slate-400">Tidak ada obat.</td></tr>
+                          <tr><td colSpan={6} className="py-6 text-center text-slate-400">Tidak ada obat.</td></tr>
                         ) : (
                           paginatedPersediaanObat.map(m => {
-                            const mult = m.unit === 'Lusin' ? 12 : (m.unitMultiplier || 1);
-                            const costPerPcs = mult > 1 ? m.purchasePrice / mult : m.purchasePrice;
-                            const val = Math.round(m.stock * costPerPcs);
+                            const primary = getPrimaryUnit(m);
+                            const purchasePerBase = primary?.purchasePricePerBase ?? ((m.purchasePrice || 0) / (m.unitMultiplier || 1));
+                            const val = Math.round(m.stock * purchasePerBase);
                             return (
                               <tr key={m.id} className="hover:bg-slate-50">
-                                <td className="py-2.5 px-3 font-bold text-slate-800">{m.name}</td>
+                                <td className="py-2.5 px-3 font-bold text-slate-800">
+                                  {m.name}
+                                  <span className="block text-[10px] text-slate-500 font-normal mt-0.5">Customer: <strong className="text-slate-700">{uniqueLabels(getMedicineTransactions(m).map(formatTransactionCustomer)).join(', ') || '-'}</strong></span>
+                                  <span className="block text-[10px] text-slate-500 font-normal">Jenis harga: <strong className="text-slate-700">{uniqueLabels(getMedicineTransactions(m).flatMap(getTransactionPriceTypeLabels)).join(', ') || '-'}</strong></span>
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-500">{m.noBatch || '-'}</td>
                                 <td className="py-2.5 px-3 text-slate-600">{m.category}</td>
-                                <td className="py-2.5 px-3 text-center font-semibold text-slate-700">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier)}</td>
+                                <td className="py-2.5 px-3 text-center font-semibold text-slate-700">{formatStockDisplay(m.stock, m.unit, m.unitMultiplier, m.units)}</td>
                                 <td className="py-2.5 px-3 text-right text-slate-600">{formatRupiah(m.purchasePrice)}</td>
                                 <td className="py-2.5 px-3 text-right font-extrabold text-emerald-700">{formatRupiah(val)}</td>
                               </tr>
@@ -1726,7 +1769,7 @@ export const FinancesView: React.FC = () => {
                             paginatedModalDisetorList.map(cf => (
                               <tr key={cf.id} className="hover:bg-slate-50">
                                 <td className="py-2 px-3 text-slate-700">{formatDate(cf.date)}</td>
-                                <td className="py-2 px-3 text-slate-600">{cf.note}</td>
+                                <td className="py-2 px-3 text-slate-600">{displayTransactionText(cf.note)}</td>
                                 <td className="py-2 px-3 text-right font-extrabold text-emerald-600">+{formatRupiah(cf.amount)}</td>
                               </tr>
                             ))
@@ -1839,6 +1882,7 @@ export const FinancesView: React.FC = () => {
                         <tr>
                           <th className="py-2.5 px-3 font-bold">No. Transaksi / Waktu</th>
                           <th className="py-2.5 px-3 font-bold">Pelanggan</th>
+                          <th className="py-2.5 px-3 font-bold">Jenis Harga</th>
                           <th className="py-2.5 px-3 font-bold">Dokter</th>
                           <th className="py-2.5 px-3 font-bold">Kasir</th>
                           <th className="py-2.5 px-3 font-bold text-center">Item</th>
@@ -1849,7 +1893,7 @@ export const FinancesView: React.FC = () => {
                       <tbody className="divide-y divide-slate-100">
                         {paginatedFilteredTransactions.length === 0 ? (
                           <tr>
-                            <td colSpan={7} className="py-8 text-center text-slate-400">Tidak ada transaksi penjualan pada periode ini.</td>
+                            <td colSpan={8} className="py-8 text-center text-slate-400">Tidak ada transaksi penjualan pada periode ini.</td>
                           </tr>
                         ) : (
                           paginatedFilteredTransactions.map(trx => {
@@ -1858,10 +1902,11 @@ export const FinancesView: React.FC = () => {
                               <React.Fragment key={trx.id}>
                                 <tr className={`hover:bg-slate-50/80 transition-colors ${isExpanded ? 'bg-slate-50/90' : ''}`}>
                                   <td className="py-2.5 px-3 font-bold text-slate-800">
-                                    {trx.id}
+                                    {transactionLabels.get(trx.id) || trx.id}
                                     <span className="block font-normal text-[10px] text-slate-500">{formatDateTime(trx.date)}</span>
                                   </td>
-                                  <td className="py-2.5 px-3 text-slate-600 font-medium">{trx.customerName || 'Umum'}</td>
+                                  <td className="py-2.5 px-3 text-slate-600 font-medium">{formatTransactionCustomer(trx)}</td>
+                                  <td className="py-2.5 px-3 text-slate-600">{getTransactionPriceTypeLabels(trx).join(', ') || '-'}</td>
                                   <td className="py-2.5 px-3 text-slate-500">{trx.doctorName || '-'}</td>
                                   <td className="py-2.5 px-3 text-slate-500">{trx.cashierName || 'Kasir'}</td>
                                   <td className="py-2.5 px-3 text-center">
@@ -1881,24 +1926,21 @@ export const FinancesView: React.FC = () => {
                                 </tr>
                                 {isExpanded && (
                                   <tr>
-                                    <td colSpan={7} className="p-3 bg-slate-100/70">
+                                    <td colSpan={8} className="p-3 bg-slate-100/70">
                                       <div className="bg-white rounded-xl p-3 border border-slate-200 space-y-2">
-                                        <p className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Rincian Obat Terjual Pada Nota #{trx.id}</p>
+                                        <p className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Rincian Obat Terjual Pada Nota #{transactionLabels.get(trx.id) || trx.id}</p>
                                         <div className="divide-y divide-slate-100">
                                           {trx.items.map((it, idx) => {
                                             const med = medicines.find(m => m.id === it.medicineId);
-                                            const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
-                                            const itemMult = it.unit === 'Lusin' ? 12 : (it.unitMultiplier || masterMult);
-                                            const purPrice = it.purchasePrice ?? med?.purchasePrice ?? Math.round(it.price * 0.7);
-                                            const costPerPcs = masterMult > 1 ? purPrice / masterMult : purPrice;
-                                            const qtyPcs = it.qty * itemMult;
-                                            const lineHPP = Math.round(costPerPcs * qtyPcs);
+                                            const lineHPP = transactionItemCost(it, med);
                                             const lineProfit = it.subtotal - lineHPP;
                                             return (
                                               <div key={idx} className="py-1.5 flex justify-between items-center text-xs">
                                                 <div>
                                                   <span className="font-bold text-slate-800">{it.medicineName}</span>
-                                                  <span className="text-slate-500 ml-2">({it.qty} x {formatRupiah(it.price)})</span>
+                                                  <span className="text-slate-500 ml-2">({transactionItemDisplayLabel(it)} @ {formatRupiah(transactionItemSalePrice(it))})</span>
+                                                  <span className="block text-[10px] text-slate-400">{transactionItemBaseDisplayLabel(it, med)}</span>
+                                                  <span className="block text-[10px] text-indigo-600">{transactionItemPriceTypeLabel(it, med)}</span>
                                                 </div>
                                                 <div className="text-right">
                                                   <span className="font-bold text-slate-900 mr-3">Subtotal: {formatRupiah(it.subtotal)}</span>
@@ -1954,7 +1996,9 @@ export const FinancesView: React.FC = () => {
                         <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                           <tr>
                             <th className="py-2.5 px-3 font-bold">Nama Obat / Alkes</th>
-                            <th className="py-2.5 px-3 font-bold text-center">Qty Terjual</th>
+                            <th className="py-2.5 px-3 font-bold text-center">Qty / Kemasan</th>
+                            <th className="py-2.5 px-3 font-bold">Customer</th>
+                            <th className="py-2.5 px-3 font-bold">Jenis Harga</th>
                             <th className="py-2.5 px-3 font-bold text-right">Total Omset Jual</th>
                             <th className="py-2.5 px-3 font-bold text-right">Total HPP (Modal)</th>
                             <th className="py-2.5 px-3 font-bold text-right">Laba Kotor (Rp)</th>
@@ -1964,7 +2008,7 @@ export const FinancesView: React.FC = () => {
                         <tbody className="divide-y divide-slate-100">
                           {paginatedMedicineProfits.length === 0 ? (
                             <tr>
-                              <td colSpan={6} className="py-8 text-center text-slate-400">Tidak ada produk terjual pada periode ini.</td>
+                              <td colSpan={8} className="py-8 text-center text-slate-400">Tidak ada produk terjual pada periode ini.</td>
                             </tr>
                           ) : (
                             paginatedMedicineProfits.map((med, idx) => {
@@ -1972,7 +2016,12 @@ export const FinancesView: React.FC = () => {
                               return (
                                 <tr key={med.id || idx} className="hover:bg-slate-50">
                                   <td className="py-2.5 px-3 font-bold text-slate-800">{med.name}</td>
-                                  <td className="py-2.5 px-3 text-center font-bold text-slate-700">{med.qty} pcs</td>
+                                  <td className="py-2.5 px-3 text-center font-bold text-slate-700">
+                                    <span className="block">{med.displayLabel}</span>
+                                    <span className="block text-[10px] text-slate-500">Stok dasar: {med.baseQuantity} {med.baseUnit}</span>
+                                  </td>
+                                  <td className="py-2.5 px-3 text-slate-700">{med.customerLabels.join(', ') || '-'}</td>
+                                  <td className="py-2.5 px-3 text-slate-700">{med.priceTypeLabels.join(', ') || '-'}</td>
                                   <td className="py-2.5 px-3 text-right font-medium text-slate-900">{formatRupiah(med.sales)}</td>
                                   <td className="py-2.5 px-3 text-right text-rose-600 font-medium">{formatRupiah(med.hpp)}</td>
                                   <td className="py-2.5 px-3 text-right font-black text-emerald-700">+{formatRupiah(med.profit)}</td>
@@ -2018,13 +2067,15 @@ export const FinancesView: React.FC = () => {
                           <th className="py-2.5 px-3 font-bold">Kategori</th>
                           <th className="py-2.5 px-3 font-bold">Keterangan / Rincian</th>
                           <th className="py-2.5 px-3 font-bold">Pencatat</th>
+                          <th className="py-2.5 px-3 font-bold">Customer</th>
+                          <th className="py-2.5 px-3 font-bold">Jenis Harga</th>
                           <th className="py-2.5 px-3 font-bold text-right">Jumlah (Rp)</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {paginatedExpensesList.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="py-8 text-center text-slate-400">Tidak ada pengeluaran operasional pada periode ini.</td>
+                            <td colSpan={7} className="py-8 text-center text-slate-400">Tidak ada pengeluaran operasional pada periode ini.</td>
                           </tr>
                         ) : (
                           paginatedExpensesList.map(cf => (
@@ -2035,8 +2086,10 @@ export const FinancesView: React.FC = () => {
                                   {cf.category || 'Operasional'}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3 text-slate-800 font-medium">{cf.note}</td>
+                              <td className="py-2.5 px-3 text-slate-800 font-medium">{displayTransactionText(cf.note)}</td>
                               <td className="py-2.5 px-3 text-slate-500">{cf.recordedBy || 'Admin'}</td>
+                              <td className="py-2.5 px-3 text-slate-400">-</td>
+                              <td className="py-2.5 px-3 text-slate-400">-</td>
                               <td className="py-2.5 px-3 text-right font-extrabold text-rose-600">- {formatRupiah(cf.amount)}</td>
                             </tr>
                           ))
@@ -2073,13 +2126,15 @@ export const FinancesView: React.FC = () => {
                           <th className="py-2.5 px-3 font-bold">Kategori</th>
                           <th className="py-2.5 px-3 font-bold">Keterangan</th>
                           <th className="py-2.5 px-3 font-bold">Pencatat</th>
+                          <th className="py-2.5 px-3 font-bold">Customer</th>
+                          <th className="py-2.5 px-3 font-bold">Jenis Harga</th>
                           <th className="py-2.5 px-3 font-bold text-right">Jumlah (Rp)</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {paginatedOtherIncomeList.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="py-8 text-center text-slate-400">Tidak ada pemasukan non-penjualan pada periode ini.</td>
+                            <td colSpan={7} className="py-8 text-center text-slate-400">Tidak ada pemasukan non-penjualan pada periode ini.</td>
                           </tr>
                         ) : (
                           paginatedOtherIncomeList.map(cf => (
@@ -2090,8 +2145,10 @@ export const FinancesView: React.FC = () => {
                                   {cf.category || 'Pemasukan'}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3 text-slate-800 font-medium">{cf.note}</td>
+                              <td className="py-2.5 px-3 text-slate-800 font-medium">{displayTransactionText(cf.note)}</td>
                               <td className="py-2.5 px-3 text-slate-500">{cf.recordedBy || 'Admin'}</td>
+                              <td className="py-2.5 px-3 text-slate-400">-</td>
+                              <td className="py-2.5 px-3 text-slate-400">-</td>
                               <td className="py-2.5 px-3 text-right font-extrabold text-emerald-600">+ {formatRupiah(cf.amount)}</td>
                             </tr>
                           ))

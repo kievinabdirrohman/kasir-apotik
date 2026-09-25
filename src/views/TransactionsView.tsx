@@ -1,7 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
+import logoImg from '../assets/logo.png';
+import { ReportExportActions } from '../components/ReportExportActions';
 import { Transaction } from '../types';
-import { formatRupiah, formatDateTime, getWIBDateString, isPpnTransaction, getItemIsPpn } from '../utils/formatters';
+import { formatRupiah, formatDateTime, formatTransactionCustomer, getWIBDateString, isPpnTransaction, getItemIsPpn } from '../utils/formatters';
+import { transactionItemBaseDisplayLabel, transactionItemBaseQuantity, transactionItemCost, transactionItemDisplayLabel, transactionItemPriceTypeLabel, transactionItemSalePrice } from '../utils/unitConversion';
+import { buildAuditExportModel, loadAuditFilterState, updateAuditFilterState, type AuditBookDateRange, type AuditExportScope } from '../utils/reportExport';
+import { downloadAuditPdf } from '../utils/reportPdf';
 import {
   Receipt,
   Search,
@@ -21,11 +26,17 @@ import {
   DollarSign,
 } from 'lucide-react';
 import { PaginationControls } from '../components/PaginationControls';
+import { InlineNotice } from '../components/InlineNotice';
 
 export const TransactionsView: React.FC = () => {
   const {
     transactions,
     medicines,
+    customers,
+    doctors,
+    stockHistory,
+    cashFlows,
+    settings,
     cancelTransaction,
     currentUser,
     setLastTransaction,
@@ -33,10 +44,11 @@ export const TransactionsView: React.FC = () => {
   } = useApp();
 
   const todayStr = getWIBDateString();
+  const savedAuditFilters = loadAuditFilterState();
 
   // Basic Search & Filter State
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState(savedAuditFilters.transactions.searchTerm);
+  const [statusFilter, setStatusFilter] = useState<string>(savedAuditFilters.transactions.statusFilter);
   const [selectedTrxDetail, setSelectedTrxDetail] = useState<Transaction | null>(null);
 
   // Detail modal pagination (transaction items)
@@ -44,20 +56,23 @@ export const TransactionsView: React.FC = () => {
   const DETAIL_ITEMS_PER_PAGE = 10;
 
   // Date Range Filter State (Default: Hari Ini / 1_day)
-  const [datePreset, setDatePreset] = useState<string>('1_day');
-  const [startDate, setStartDate] = useState<string>(todayStr);
-  const [endDate, setEndDate] = useState<string>(todayStr);
+  const [datePreset, setDatePreset] = useState<string>(savedAuditFilters.transactions.datePreset);
+  const [startDate, setStartDate] = useState<string>(savedAuditFilters.transactions.startDate || todayStr);
+  const [endDate, setEndDate] = useState<string>(savedAuditFilters.transactions.endDate || todayStr);
 
   // Advance Filters State
-  const [methodFilter, setMethodFilter] = useState<string>('all');
-  const [prescriptionFilter, setPrescriptionFilter] = useState<string>('all');
-  const [cashierFilter, setCashierFilter] = useState<string>('all');
-  const [taxFilter, setTaxFilter] = useState<string>('all');
+  const [methodFilter, setMethodFilter] = useState<string>(savedAuditFilters.transactions.methodFilter);
+  const [prescriptionFilter, setPrescriptionFilter] = useState<string>(savedAuditFilters.transactions.prescriptionFilter);
+  const [cashierFilter, setCashierFilter] = useState<string>(savedAuditFilters.transactions.cashierFilter);
+  const [taxFilter, setTaxFilter] = useState<string>(savedAuditFilters.transactions.taxFilter);
   const [showAdvanceFilters, setShowAdvanceFilters] = useState<boolean>(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [pageNotice, setPageNotice] = useState<string | null>(null);
 
   // Cancel Modal state
   const [cancellingTrx, setCancellingTrx] = useState<Transaction | null>(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   // Preset Date Selection Handler
   const handlePresetChange = (preset: string) => {
@@ -120,10 +135,11 @@ export const TransactionsView: React.FC = () => {
     e.preventDefault();
     if (!cancellingTrx) return;
     if (!cancelReason.trim()) {
-      alert('Mohon tuliskan alasan pembatalan transaksi.');
+      setCancelError('Mohon tuliskan alasan pembatalan transaksi.');
       return;
     }
 
+    setCancelError(null);
     await cancelTransaction(cancellingTrx.id, cancelReason);
     setCancellingTrx(null);
     setCancelReason('');
@@ -233,6 +249,56 @@ export const TransactionsView: React.FC = () => {
     safeDetailPage * DETAIL_ITEMS_PER_PAGE
   );
 
+  const getTransactionPriceTypeLabels = (transaction: Transaction) => Array.from(new Set(
+    transaction.items.map(item => transactionItemPriceTypeLabel(
+      item,
+      medicines.find(medicine => medicine.id === item.medicineId || medicine.name === item.medicineName),
+    ))
+  )).join(', ');
+
+  const transactionFilterSnapshot = () => ({
+    datePreset,
+    startDate,
+    endDate,
+    statusFilter,
+    methodFilter,
+    prescriptionFilter,
+    cashierFilter,
+    taxFilter,
+    searchTerm,
+  });
+
+  useEffect(() => {
+    updateAuditFilterState({ transactions: transactionFilterSnapshot() });
+  }, [datePreset, startDate, endDate, statusFilter, methodFilter, prescriptionFilter, cashierFilter, taxFilter, searchTerm]);
+
+  const handleAuditExport = async (scope: Extract<AuditExportScope, 'transactions' | 'audit-book'>, auditBookDateRange?: AuditBookDateRange) => {
+    setPageNotice(null);
+    setIsExporting(true);
+    try {
+      const filters = updateAuditFilterState({ transactions: transactionFilterSnapshot() });
+      const model = buildAuditExportModel({
+        scope,
+        auditBookDateRange,
+        settings,
+        currentUser: currentUser || { name: 'Sistem', username: 'sistem', role: 'admin' },
+        transactions,
+        customers,
+        doctors,
+        medicines,
+        stockHistory,
+        cashFlows,
+        filters,
+      });
+      await downloadAuditPdf(model, logoImg);
+    } catch (error) {
+      console.error('Gagal membuat PDF riwayat transaksi:', error);
+      setPageNotice('Export PDF gagal. Silakan coba lagi.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
@@ -244,6 +310,11 @@ export const TransactionsView: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ReportExportActions
+            onExport={() => handleAuditExport('transactions')}
+            onAuditBook={range => handleAuditExport('audit-book', range)}
+            isExporting={isExporting}
+          />
           {activeFiltersCount > 0 && (
             <button
               type="button"
@@ -256,6 +327,13 @@ export const TransactionsView: React.FC = () => {
           )}
         </div>
       </div>
+
+      {pageNotice && (
+        <InlineNotice
+          message={pageNotice}
+          onDismiss={() => setPageNotice(null)}
+        />
+      )}
 
       {/* Summary Metrics Banner */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -550,7 +628,10 @@ export const TransactionsView: React.FC = () => {
                 <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-50 p-2 rounded-lg border border-slate-100">
                   <div>
                     <span className="text-slate-400 block text-[10px]">Pelanggan & Dokter:</span>
-                    <span className="font-bold text-slate-800">{trx.customerName || 'Customer Umum'}</span>
+                    <span className="font-bold text-slate-800">{formatTransactionCustomer(trx)}</span>
+                    <span className="text-[10px] text-indigo-700 font-medium block">
+                      Jenis harga: {getTransactionPriceTypeLabels(trx)}
+                    </span>
                     {trx.doctorName && (
                       <span className="text-[10px] text-indigo-700 font-medium block">
                         Dr: {trx.doctorName}
@@ -588,9 +669,10 @@ export const TransactionsView: React.FC = () => {
                       <button
                         onClick={() => {
                           if (currentUser.role !== 'admin') {
-                            alert('Pembatalan transaksi hanya dapat dilakukan oleh Admin.');
+                            setPageNotice('Pembatalan transaksi hanya dapat dilakukan oleh Admin.');
                             return;
                           }
+                          setCancelError(null);
                           setCancellingTrx(trx);
                         }}
                         className={`p-1.5 rounded-lg transition-colors ${
@@ -658,7 +740,10 @@ export const TransactionsView: React.FC = () => {
                     {/* Customer & Doctor */}
                     <td className="py-3 px-4">
                       <div className="font-semibold text-slate-800">
-                        {trx.customerName || 'Customer Umum'}
+                        {formatTransactionCustomer(trx)}
+                      </div>
+                      <div className="text-[10px] text-indigo-700 font-medium mt-0.5">
+                        Jenis harga: {getTransactionPriceTypeLabels(trx)}
                       </div>
                       {trx.doctorName && (
                         <div className="text-[10px] text-indigo-700 font-medium mt-0.5">
@@ -720,9 +805,10 @@ export const TransactionsView: React.FC = () => {
                           <button
                             onClick={() => {
                               if (currentUser.role !== 'admin') {
-                                alert('Pembatalan transaksi hanya dapat dilakukan oleh Admin.');
+                                setPageNotice('Pembatalan transaksi hanya dapat dilakukan oleh Admin.');
                                 return;
                               }
+                              setCancelError(null);
                               setCancellingTrx(trx);
                             }}
                             className={`p-1.5 rounded-lg transition-colors ${
@@ -892,13 +978,11 @@ export const TransactionsView: React.FC = () => {
                     <div>
                       <span className="text-slate-400 text-[10px] font-bold block uppercase">Customer / Pasien</span>
                       <span className="font-bold text-slate-900">
-                        {selectedTrxDetail.customerName || 'Customer Umum'}
-                      </span>
-                      {selectedTrxDetail.customerMemberNo && (
-                        <span className="block text-[10px] text-emerald-700 font-mono font-medium">
-                          No. Member: {selectedTrxDetail.customerMemberNo}
-                        </span>
-                      )}
+                         {formatTransactionCustomer(selectedTrxDetail)}
+                       </span>
+                       <span className="block text-[10px] text-indigo-700 font-medium">
+                         Jenis harga: {getTransactionPriceTypeLabels(selectedTrxDetail)}
+                       </span>
                     </div>
                   </div>
 
@@ -969,6 +1053,7 @@ export const TransactionsView: React.FC = () => {
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
                           <th className="py-2.5 px-3">Kode & Sediaan Obat</th>
+                          <th className="py-2.5 px-3">No. Batch</th>
                           <th className="py-2.5 px-3 text-center">Status & Nominal PPN</th>
                           <th className="py-2.5 px-3 text-right">Harga Satuan</th>
                           <th className="py-2.5 px-3 text-center">Jumlah Qty</th>
@@ -990,6 +1075,7 @@ export const TransactionsView: React.FC = () => {
                                 </span>
                                 <span className="font-bold text-slate-900">{it.medicineName}</span>
                               </td>
+                              <td className="py-2.5 px-3 text-slate-500">{it.noBatch || '-'}</td>
                               <td className="py-2.5 px-3 text-center">
                                 {itemIsPpn ? (
                                   <div>
@@ -1012,11 +1098,13 @@ export const TransactionsView: React.FC = () => {
                                 )}
                               </td>
                               <td className="py-2.5 px-3 text-right font-medium text-slate-700">
-                                {formatRupiah(it.price)}
+                                {formatRupiah(transactionItemSalePrice(it))}
                               </td>
                               <td className="py-2.5 px-3 text-center font-bold text-slate-900">
-                                {it.qty} {it.unit}{(it.unit === 'Lusin' || (it.unitMultiplier && it.unitMultiplier > 1)) ? ` (${it.qty * (it.unit === 'Lusin' ? 12 : (it.unitMultiplier || 1))} pcs)` : ''}
-                              </td>
+                               <span className="block">{transactionItemDisplayLabel(it)}</span>
+                               <span className="block text-[10px] text-slate-500">{transactionItemBaseDisplayLabel(it, medInfo)}</span>
+                               <span className="block text-[10px] text-indigo-600">{transactionItemPriceTypeLabel(it, medInfo)}</span>
+                             </td>
                               <td className="py-2.5 px-3 text-right font-extrabold text-emerald-700">
                                 {formatRupiah(it.subtotal)}
                               </td>
@@ -1039,18 +1127,26 @@ export const TransactionsView: React.FC = () => {
                 {/* 4. Total Summary & Margin (Admin Audit) */}
                 <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200 space-y-1.5">
                   <div className="flex justify-between items-center text-xs text-emerald-900 font-semibold border-b border-emerald-200/80 pb-1">
-                    <span>Subtotal Sediaan ({selectedTrxDetail.items.reduce((sum, i) => sum + i.qty, 0)} {selectedTrxDetail.items.length === 1 ? selectedTrxDetail.items[0].unit : 'item'}):</span>
+                    <span>
+                      <span className="block">Total unit terkecil terjual ({selectedTrxDetail.items.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0)} unit)</span>
+                      <span className="block text-[10px] font-normal text-emerald-700/70">Gabungan hasil konversi seluruh unit transaksi ke unit dengan multiplier 1.</span>
+                    </span>
                     <span className="font-bold">{formatRupiah(selectedTrxDetail.items.reduce((sum, i) => sum + i.subtotal, 0))}</span>
                   </div>
                   <div className="flex justify-between items-center font-extrabold text-emerald-950 text-sm">
                     <span>TOTAL DIBAYAR:</span>
                     <span className="text-base text-emerald-800">{formatRupiah(selectedTrxDetail.totalAmount)}</span>
                   </div>
-                  {(selectedTrxDetail.costAmount ?? 0) > 0 && currentUser.role === 'admin' && (() => {
+                  {currentUser.role === 'admin' && (() => {
                     // Round to whole rupiah first so tiny fractional cost/laba values never
                     // collapse to a misleading "Rp 0" under TOTAL DIBAYAR (maximumFractionDigits: 0).
-                    const costAmount = Math.round(Number(selectedTrxDetail.costAmount) || 0);
-                    const profit = Math.round(Number(selectedTrxDetail.totalAmount ?? 0) - costAmount);
+                    const costAmount = Math.round(selectedTrxDetail.items.reduce((sum, item) => {
+                      const med = medicines.find(medicine => medicine.id === item.medicineId);
+                      return sum + transactionItemCost(item, med);
+                    }, 0));
+                    const productSubtotal = selectedTrxDetail.items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
+                    const profit = Math.round(productSubtotal - costAmount);
+                    if (costAmount <= 0 && profit <= 0) return null;
                     const displayValue = (v: number) => (v === 0 ? '—' : formatRupiah(v));
                     return (
                       <div className="flex justify-between items-center text-[11px] text-emerald-800 pt-1 border-t border-emerald-200/80">
@@ -1125,6 +1221,13 @@ export const TransactionsView: React.FC = () => {
                 <p>• Stok obat akan dikembalikan otomatis ke katalog.</p>
                 <p>• Total belanja customer terkait akan dikurangi.</p>
               </div>
+
+              {cancelError && (
+                <InlineNotice
+                  message={cancelError}
+                  onDismiss={() => setCancelError(null)}
+                />
+              )}
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Alasan Pembatalan</label>

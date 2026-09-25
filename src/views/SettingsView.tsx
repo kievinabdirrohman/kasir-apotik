@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { Settings as SettingsIcon, Store, FileText, CheckCircle2, Shield, Printer, RefreshCw, Loader2 } from 'lucide-react';
-import type { PrinterInfo } from '../electron.d';
+import { Settings as SettingsIcon, Store, FileText, CheckCircle2, Shield, Printer, RefreshCw, Loader2, HardDrive, FolderOpen } from 'lucide-react';
+import type { PrinterInfo, StorageLocationInfo } from '../electron.d';
+import { DEFAULT_PRINTER_SETTINGS, normalizePrinterSettings } from '../utils/printerSettings';
 
 export const SettingsView: React.FC = () => {
   const { settings, updateSettings, currentUser } = useApp();
@@ -30,10 +31,22 @@ export const SettingsView: React.FC = () => {
   const [paperWidth, setPaperWidth] = useState<'58mm' | '80mm'>(
     settings.paperWidth === '80mm' ? '80mm' : '58mm'
   );
+  const [marginTopMm, setMarginTopMm] = useState(settings.marginTopMm ?? DEFAULT_PRINTER_SETTINGS.marginTopMm);
+  const [marginRightMm, setMarginRightMm] = useState(settings.marginRightMm ?? DEFAULT_PRINTER_SETTINGS.marginRightMm);
+  const [marginBottomMm, setMarginBottomMm] = useState(settings.marginBottomMm ?? DEFAULT_PRINTER_SETTINGS.marginBottomMm);
+  const [marginLeftMm, setMarginLeftMm] = useState(settings.marginLeftMm ?? DEFAULT_PRINTER_SETTINGS.marginLeftMm);
+  const [printerFontSize, setPrinterFontSize] = useState(settings.printerFontSize ?? DEFAULT_PRINTER_SETTINGS.fontSize);
+  const [printerLineHeight, setPrinterLineHeight] = useState(settings.printerLineHeight ?? DEFAULT_PRINTER_SETTINGS.lineHeight);
+  const [printerLabelWidthPct, setPrinterLabelWidthPct] = useState(settings.printerLabelWidthPct ?? DEFAULT_PRINTER_SETTINGS.labelWidthPct);
+  const [printerColumnGapMm, setPrinterColumnGapMm] = useState(settings.printerColumnGapMm ?? DEFAULT_PRINTER_SETTINGS.columnGapMm);
+  const [printerAmountAlignment, setPrinterAmountAlignment] = useState<'left' | 'right'>(settings.printerAmountAlignment === 'left' ? 'left' : 'right');
   const [autoPrint, setAutoPrint] = useState(!!settings.autoPrintReceipt);
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
   const [printerStatus, setPrinterStatus] = useState<string>('');
   const [isPrinting, setIsPrinting] = useState(false);
+  const [storageLocation, setStorageLocation] = useState<StorageLocationInfo | null>(null);
+  const [storageStatus, setStorageStatus] = useState('');
+  const [isMigratingStorage, setIsMigratingStorage] = useState(false);
 
   const loadPrinters = async () => {
     if (!window.electronAPI) return;
@@ -50,6 +63,34 @@ export const SettingsView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!window.electronAPI) return;
+    void window.electronAPI.getStorageLocation().then(setStorageLocation).catch(() => setStorageLocation(null));
+  }, []);
+
+  const handleMigrateStorage = async () => {
+    if (!window.electronAPI || isMigratingStorage) return;
+    const targetFolder = await window.electronAPI.chooseStorageFolder();
+    if (!targetFolder) return;
+    if (!window.confirm(`Pindahkan database ke folder berikut?\n\n${targetFolder}\n\nDatabase lama tetap disimpan sebagai backup.`)) return;
+
+    setIsMigratingStorage(true);
+    setStorageStatus('Menyalin dan memverifikasi database...');
+    try {
+      const result = await window.electronAPI.migrateStorage(targetFolder);
+      if (!result.success) {
+        setStorageStatus(`Gagal memindahkan data: ${result.error || 'kesalahan tidak diketahui'}`);
+        return;
+      }
+      setStorageStatus(`Berhasil dipindahkan ke ${result.databasePath}. Aplikasi sedang dimuat ulang.`);
+      setStorageLocation(await window.electronAPI.getStorageLocation());
+    } catch (err: unknown) {
+      setStorageStatus(`Gagal memindahkan data: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsMigratingStorage(false);
+    }
+  };
+
   const handleTestPrint = async () => {
     if (!window.electronAPI) return;
     setIsPrinting(true);
@@ -59,6 +100,7 @@ export const SettingsView: React.FC = () => {
         paperWidth,
         printerName: printerName || undefined,
         pharmacyName: name,
+        printerSettings: normalizePrinterSettings({ ...settings, marginTopMm, marginRightMm, marginBottomMm, marginLeftMm, printerFontSize, printerLineHeight, printerLabelWidthPct, printerColumnGapMm, printerAmountAlignment }, paperWidth),
       });
       setPrinterStatus(
         result.success
@@ -89,10 +131,31 @@ export const SettingsView: React.FC = () => {
       printerName,
       paperWidth,
       autoPrintReceipt: autoPrint,
+      marginTopMm,
+      marginRightMm,
+      marginBottomMm,
+      marginLeftMm,
+      printerFontSize,
+      printerLineHeight,
+      printerLabelWidthPct,
+      printerColumnGapMm,
+      printerAmountAlignment,
     });
 
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 3000);
+  };
+
+  const resetPrinterDefaults = () => {
+    setMarginTopMm(DEFAULT_PRINTER_SETTINGS.marginTopMm);
+    setMarginRightMm(DEFAULT_PRINTER_SETTINGS.marginRightMm);
+    setMarginBottomMm(DEFAULT_PRINTER_SETTINGS.marginBottomMm);
+    setMarginLeftMm(DEFAULT_PRINTER_SETTINGS.marginLeftMm);
+    setPrinterFontSize(DEFAULT_PRINTER_SETTINGS.fontSize);
+    setPrinterLineHeight(DEFAULT_PRINTER_SETTINGS.lineHeight);
+    setPrinterLabelWidthPct(DEFAULT_PRINTER_SETTINGS.labelWidthPct);
+    setPrinterColumnGapMm(DEFAULT_PRINTER_SETTINGS.columnGapMm);
+    setPrinterAmountAlignment(DEFAULT_PRINTER_SETTINGS.amountAlignment);
   };
 
   if (currentUser.role !== 'admin') {
@@ -363,6 +426,43 @@ export const SettingsView: React.FC = () => {
                 </span>
               </label>
 
+              <div className="border-t border-slate-100 pt-4 space-y-3">
+                <div>
+                  <h4 className="font-bold text-slate-800">Presisi Layout Struk</h4>
+                  <p className="text-[10px] text-slate-400">Atur margin, font, dan kolom agar nominal tidak overlap atau keluar kertas.</p>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    ['Atas', marginTopMm, setMarginTopMm], ['Kanan', marginRightMm, setMarginRightMm],
+                    ['Bawah', marginBottomMm, setMarginBottomMm], ['Kiri', marginLeftMm, setMarginLeftMm],
+                  ].map(([label, value, setter]) => (
+                    <label key={label as string} className="font-semibold text-slate-700">
+                      {label} (mm)
+                      <input type="number" min="0" max="10" step="0.5" value={value as number} onChange={e => (setter as (v: number) => void)(Number(e.target.value))} className="mt-1 w-full px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200" />
+                    </label>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <label className="font-semibold text-slate-700">Font (pt)<input type="number" min="7" max="18" step="1" value={printerFontSize} onChange={e => setPrinterFontSize(Number(e.target.value))} className="mt-1 w-full px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200" /></label>
+                  <label className="font-semibold text-slate-700">Line-height<input type="number" min="1" max="2" step="0.05" value={printerLineHeight} onChange={e => setPrinterLineHeight(Number(e.target.value))} className="mt-1 w-full px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200" /></label>
+                  <label className="font-semibold text-slate-700">Lebar label (%)<input type="number" min="35" max="70" step="1" value={printerLabelWidthPct} onChange={e => setPrinterLabelWidthPct(Number(e.target.value))} className="mt-1 w-full px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200" /></label>
+                  <label className="font-semibold text-slate-700">Jarak kolom (mm)<input type="number" min="0" max="12" step="0.5" value={printerColumnGapMm} onChange={e => setPrinterColumnGapMm(Number(e.target.value))} className="mt-1 w-full px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200" /></label>
+                </div>
+                <div className="flex items-end gap-3">
+                  <label className="font-semibold text-slate-700">Alignment nominal
+                    <select value={printerAmountAlignment} onChange={e => setPrinterAmountAlignment(e.target.value as 'left' | 'right')} className="block mt-1 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200">
+                      <option value="right">Rata kanan</option><option value="left">Rata kiri</option>
+                    </select>
+                  </label>
+                  <button type="button" onClick={resetPrinterDefaults} className="px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">Reset Default Printer</button>
+                </div>
+                <div className="mx-auto border border-dashed border-slate-300 bg-white p-3 font-mono text-[10px]" style={{ width: paperWidth === '80mm' ? '80mm' : '58mm', lineHeight: printerLineHeight }}>
+                  <div className="text-center font-bold">{name || 'Apotek'}</div>
+                  <div className="flex justify-between"><span style={{ width: `${printerLabelWidthPct}%` }}>Total:</span><span className="text-right whitespace-nowrap">Rp 125.000</span></div>
+                  <div className="flex justify-between"><span style={{ width: `${printerLabelWidthPct}%` }}>Nama barang sangat panjang membungkus</span><span className="text-right whitespace-nowrap">Rp 12.000</span></div>
+                </div>
+              </div>
+
               <div className="flex items-center gap-3 pt-1">
                 <button
                   type="button"
@@ -375,6 +475,48 @@ export const SettingsView: React.FC = () => {
                 </button>
                 {printerStatus && <span className="text-[11px] text-slate-600">{printerStatus}</span>}
               </div>
+            </>
+          )}
+        </div>
+
+        {/* Lokasi Penyimpanan Data (Desktop) */}
+        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-xs space-y-4 text-xs">
+          <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2 pb-2 border-b border-slate-100">
+            <HardDrive className="w-4 h-4 text-emerald-600" />
+            Lokasi Penyimpanan Data
+          </h3>
+          {!isDesktop ? (
+            <p className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 text-[11px]">
+              Pemindahan lokasi database tersedia pada aplikasi desktop Windows.
+            </p>
+          ) : (
+            <>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-bold text-slate-700">Status</span>
+                  <span className={`px-2 py-1 rounded-lg font-bold ${storageLocation?.isDefault ? 'bg-slate-200 text-slate-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                    {storageLocation?.isDefault ? 'Default System' : 'Lokasi Custom'}
+                  </span>
+                </div>
+                <div className="text-slate-500 break-all font-mono text-[10px]">
+                  {storageLocation?.databasePath || 'Memuat lokasi database...'}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => void handleMigrateStorage()}
+                  disabled={isMigratingStorage}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-2 transition-colors disabled:opacity-60"
+                >
+                  {isMigratingStorage ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderOpen className="w-4 h-4" />}
+                  Pindahkan Data ke Folder Lain
+                </button>
+                {storageStatus && <span className="text-[11px] text-slate-600 break-all">{storageStatus}</span>}
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Pilih folder kosong pada partisi lain, misalnya D:\DataApotek. Database lama tidak dihapus dan dibuatkan backup.
+              </p>
             </>
           )}
         </div>

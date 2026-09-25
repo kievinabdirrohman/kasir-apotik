@@ -1,7 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { Medicine, TransactionItem, Customer, Doctor, MedicineCategory, Transaction } from '../types';
+import { Medicine, TransactionItem, Customer, Doctor, MedicineCategory, Transaction, MedicineCustomPrice, MedicineCustomPriceCustomer, MedicineUnit } from '../types';
 import { formatRupiah, getExpiredStatus, formatDateTime, formatStockDisplay as formatStockDisplayUtil } from '../utils/formatters';
+import { getMedicineUnits, getPrimaryUnit, hasMedicinePriceSourceConflict, transactionItemBaseQuantity, transactionItemDisplayLabel } from '../utils/unitConversion';
+import { buildCustomerSearchIndex, customerDisplayLabel, searchCustomerIndex, type CustomerSearchIndex } from '../utils/customerSearch';
+import { InlineNotice } from '../components/InlineNotice';
 import {
   ShoppingCart,
   Search,
@@ -61,6 +64,210 @@ export type PrescriptionFormulaMode =
   | 'calc9' // 9. Profit Bersih & Surcharge Operasional (%)
   | 'pricing'; // Rumus Praktis Harga Resep Pasien Complete
 
+type CustomerPriceAutocompleteProps = {
+  prices: MedicineCustomPriceCustomer[];
+  customerIndex: CustomerSearchIndex;
+  label: string;
+  onSelect: (price: MedicineCustomPriceCustomer, customer?: Customer) => void;
+};
+
+const CustomerPriceAutocomplete: React.FC<CustomerPriceAutocompleteProps> = ({ prices, customerIndex, label, onSelect }) => {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const matchingCustomerIds = useMemo(
+    () => new Set(searchCustomerIndex(customerIndex, query).map(customer => customer.id)),
+    [customerIndex, query],
+  );
+  const filteredPrices = useMemo(
+    () => prices.filter(price => matchingCustomerIds.has(price.customerId)),
+    [matchingCustomerIds, prices],
+  );
+
+  const selectPrice = (price: MedicineCustomPriceCustomer) => {
+    const customer = customerIndex.byId.get(price.customerId);
+    onSelect(price, customer);
+    setQuery(customerDisplayLabel(customer));
+    setOpen(false);
+  };
+
+  return (
+    <div
+      className="relative"
+      onBlur={event => {
+        const nextTarget = event.relatedTarget as Node | null;
+        if (!nextTarget || !event.currentTarget.contains(nextTarget)) setOpen(false);
+      }}
+    >
+      <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</label>
+      <input
+        type="text"
+        value={query}
+        onChange={event => {
+          setQuery(event.currentTarget.value);
+          setOpen(true);
+          setHighlightedIndex(0);
+        }}
+        onFocus={() => {
+          setOpen(true);
+          setHighlightedIndex(0);
+        }}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            setOpen(false);
+          } else if (event.key === 'ArrowDown' && filteredPrices.length) {
+            event.preventDefault();
+            setHighlightedIndex(index => Math.min(index + 1, filteredPrices.length - 1));
+          } else if (event.key === 'ArrowUp' && filteredPrices.length) {
+            event.preventDefault();
+            setHighlightedIndex(index => Math.max(index - 1, 0));
+          } else if (event.key === 'Enter' && filteredPrices[highlightedIndex]) {
+            event.preventDefault();
+            selectPrice(filteredPrices[highlightedIndex]);
+          }
+        }}
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        placeholder="Cari nama atau nomor member..."
+        className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+      />
+      {open && (
+        <div role="listbox" className="absolute z-30 mt-1 max-h-44 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+          {filteredPrices.length > 0 ? filteredPrices.map((price, optionIndex) => {
+            const customer = customerIndex.byId.get(price.customerId);
+            return (
+              <button
+                key={`${price.customerId}-${price.price}`}
+                type="button"
+                onPointerDown={event => {
+                  event.preventDefault();
+                  selectPrice(price);
+                }}
+                aria-selected={optionIndex === highlightedIndex}
+                className="flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-indigo-50"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-xs font-bold text-slate-700">{customer?.name || 'Customer'}</span>
+                  <span className="block truncate text-[10px] text-slate-400">{customer?.memberNo || price.customerId}</span>
+                </span>
+                <span className="shrink-0 text-xs font-extrabold text-indigo-700">{formatRupiah(price.price)}</span>
+              </button>
+            );
+          }) : (
+            <div className="px-2.5 py-2 text-xs text-slate-400">Customer tidak ditemukan.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+type CustomerAutocompleteProps = {
+  customerIndex: CustomerSearchIndex;
+  value: string;
+  onChange: (customerId: string) => void;
+};
+
+const CustomerAutocomplete: React.FC<CustomerAutocompleteProps> = ({ customerIndex, value, onChange }) => {
+  const selectedCustomer = value ? customerIndex.byId.get(value) : undefined;
+  const selectedLabel = customerDisplayLabel(selectedCustomer);
+  const [query, setQuery] = useState(selectedCustomer ? selectedLabel : '');
+  const [open, setOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+
+  useEffect(() => {
+    setQuery(selectedCustomer ? selectedLabel : '');
+  }, [selectedCustomer, selectedLabel]);
+
+  const filteredCustomers = useMemo(() => searchCustomerIndex(customerIndex, query), [customerIndex, query]);
+  const options = useMemo(() => [undefined, ...filteredCustomers], [filteredCustomers]);
+
+  const selectCustomer = (customer?: Customer) => {
+    onChange(customer?.id || '');
+    setQuery(customer ? customerDisplayLabel(customer) : '');
+    setOpen(false);
+    setHighlightedIndex(0);
+  };
+
+  return (
+    <div
+      className="relative"
+      onBlur={event => {
+        const nextTarget = event.relatedTarget as Node | null;
+        if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+          setOpen(false);
+          setQuery(selectedCustomer ? selectedLabel : '');
+        }
+      }}
+    >
+      <input
+        type="text"
+        value={query}
+        onChange={event => {
+          setQuery(event.currentTarget.value);
+          setOpen(true);
+          setHighlightedIndex(0);
+        }}
+        onFocus={event => {
+          event.currentTarget.select();
+          setOpen(true);
+          setHighlightedIndex(0);
+        }}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            setOpen(false);
+            setQuery(selectedCustomer ? selectedLabel : '');
+          } else if (event.key === 'ArrowDown' && options.length) {
+            event.preventDefault();
+            setOpen(true);
+            setHighlightedIndex(index => Math.min(index + 1, options.length - 1));
+          } else if (event.key === 'ArrowUp' && options.length) {
+            event.preventDefault();
+            setHighlightedIndex(index => Math.max(index - 1, 0));
+          } else if (event.key === 'Enter' && options[highlightedIndex] !== undefined) {
+            event.preventDefault();
+            selectCustomer(options[highlightedIndex]);
+          } else if (event.key === 'Enter' && highlightedIndex === 0) {
+            event.preventDefault();
+            selectCustomer();
+          }
+        }}
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        aria-label="Cari customer atau member"
+        placeholder="Cari nama, nomor member, atau telepon..."
+        className="w-full px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+      />
+      {open && (
+        <div role="listbox" className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+          {options.map((customer, index) => (
+            <button
+              key={customer?.id || 'customer-empty'}
+              type="button"
+              onPointerDown={event => {
+                event.preventDefault();
+                selectCustomer(customer);
+              }}
+              aria-selected={index === highlightedIndex}
+              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs ${index === highlightedIndex ? 'bg-emerald-50' : 'hover:bg-slate-50'}`}
+            >
+              <span className="min-w-0">
+                <span className="block truncate font-bold text-slate-700">{customer ? customer.name : 'Customer Umum (Non-Member)'}</span>
+                {customer && <span className="block truncate text-[10px] text-slate-400">{customer.memberNo} · {customer.phone || '-'}</span>}
+              </span>
+            </button>
+          ))}
+          {options.length === 1 && <span className="block px-2.5 py-2 text-xs text-slate-400">Customer tidak ditemukan.</span>}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const PosView: React.FC = () => {
   const {
     medicines,
@@ -94,12 +301,14 @@ export const PosView: React.FC = () => {
 
   // Helper to format stock display with proper unit and base pcs conversion
   const formatStockDisplay = (med: Medicine): string => {
-    return formatStockDisplayUtil(med.stock, med.unit, med.unitMultiplier);
+    return formatStockDisplayUtil(med.stock, med.unit, med.unitMultiplier, med.units);
   };
 
   // Transaction Form State
   const [cart, setCart] = useState<TransactionItem[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [customerAutoSelected, setCustomerAutoSelected] = useState(false);
+  const customerIndex = useMemo(() => buildCustomerSearchIndex(customers), [customers]);
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('');
   const [isPrescription, setIsPrescription] = useState<boolean>(false);
   const [prescriptionNote, setPrescriptionNote] = useState<string>('');
@@ -127,12 +336,17 @@ export const PosView: React.FC = () => {
   const [scanAlert, setScanAlert] = useState<ScanAlert | null>(null);
   const [taxAlert, setTaxAlert] = useState<TaxAlert | null>(null);
   const [recentScanToast, setRecentScanToast] = useState<string | null>(null);
+  const [posNotice, setPosNotice] = useState<string | null>(null);
 
   // Mobile view switcher for POS ('catalog' or 'cart')
   const [mobileTab, setMobileTab] = useState<'catalog' | 'cart'>('catalog');
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const paymentInputRef = useRef<HTMLInputElement>(null);
+
+  // Price Picker State (for customer-specific pricing)
+  const [pricePickerOpen, setPricePickerOpen] = useState(false);
+  const [pricePickerMedicine, setPricePickerMedicine] = useState<Medicine | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -206,66 +420,138 @@ export const PosView: React.FC = () => {
   };
 
   // Cart Functions
-  const processAddToCart = (med: Medicine) => {
+  const cartLineKey = (item: Pick<TransactionItem, 'medicineId' | 'unitId' | 'customerId' | 'priceSource' | 'customPriceId'>): string =>
+    `${item.medicineId}|${item.unitId || ''}|${item.customPriceId || ''}|${item.priceSource || 'normal'}|${item.customerId || ''}`;
+
+  const getNormalCustomerPrices = (med: Medicine) => {
+    return (med.normalCustomerPrices ?? []).filter(price => Number(price.price) > 0);
+  };
+
+  type PriceSelection = {
+    unit: MedicineUnit;
+    price: number;
+    pricingMode: 'normal' | 'custom';
+    customerId?: string;
+    customerName?: string;
+    customPrice?: MedicineCustomPrice;
+    marginPct?: number;
+    bhpAmount?: number;
+  };
+
+  const addPricedLineToCart = (med: Medicine, selection: PriceSelection) => {
+    const { unit, price, customerId, customerName, pricingMode, customPrice } = selection;
     const isPpn = isMedicinePpn(med);
-    const itemPpnRate = isPpn ? (med.ppnRate ?? 11) : 0;
-    const multiplier = med.unit === 'Lusin' ? 12 : (med.unitMultiplier || 1);
+    const primaryUnit = getPrimaryUnit(med);
+    const profileMargin = pricingMode === 'custom'
+      ? customPrice?.marginPct
+      : unit.id === primaryUnit.id ? med.marginPct : unit.marginPct;
+    const profileBhp = pricingMode === 'custom'
+      ? customPrice?.bhpAmount
+      : unit.id === primaryUnit.id ? med.bhpAmount : unit.bhpAmount;
+    const priceSource = customerId ? 'customer' : 'normal';
+    if (hasMedicinePriceSourceConflict(cart, { medicineId: med.id, unitId: unit.id, priceSource, pricingMode, customPriceId: customPrice?.id })) {
+      setPosNotice(`Harga umum dan harga customer untuk kategori harga yang sama pada "${med.name}" (${med.code}) tidak boleh digabung. Hapus baris tersebut atau pilih sumber harga yang sama.`);
+      setPricePickerOpen(false);
+      return false;
+    }
+    const packageQuantity = pricingMode === 'custom' ? Math.max(1, Number(customPrice?.quantity) || 1) : 1;
+    const line = {
+      medicineId: med.id,
+      medicineCode: med.code,
+      medicineName: med.name,
+      unit: unit.unit,
+      unitId: unit.id,
+      price,
+      qty: 1,
+      subtotal: price,
+      isPpn,
+      ppnRate: isPpn ? (med.ppnRate ?? 11) : 0,
+      itemType: med.itemType || 'obat',
+      unitMultiplier: unit.multiplierToBase,
+      purchasePrice: unit.purchasePricePerBase ?? med.purchasePrice ?? 0,
+      noBatch: med.noBatch,
+      customerId,
+      customerName,
+      priceSource: priceSource as 'normal' | 'customer',
+      pricingMode,
+      customPriceId: customPrice?.id,
+      customQuantity: pricingMode === 'custom' ? packageQuantity : undefined,
+      customUnit: pricingMode === 'custom' ? unit.unit : undefined,
+      customTotalPrice: pricingMode === 'custom' ? price : undefined,
+      marginPct: selection.marginPct ?? profileMargin ?? 0,
+      bhpAmount: selection.bhpAmount ?? profileBhp ?? 0,
+    } satisfies TransactionItem;
 
     setCart(prev => {
-      const existing = prev.find(item => item.medicineId === med.id);
-      if (existing) {
-        const nextQty = existing.qty + 1;
-        const totalNeededPcs = nextQty * multiplier;
-        if (totalNeededPcs > med.stock) {
-          const currentCartPcs = existing.qty * multiplier;
-          const availableStockStr = formatStockDisplay(med);
-          setScanAlert({
-            type: 'stock_exceeded',
-            barcode: med.code,
-            medicine: med,
-            message: `Jumlah sediaan "${med.name}" di keranjang (${existing.qty} ${med.unit}${multiplier > 1 ? ` = ${currentCartPcs} pcs` : ''}) jika ditambah 1 ${med.unit} lagi (${totalNeededPcs} pcs) melebihi stok yang tersedia (${availableStockStr}).`,
-          });
-          return prev;
-        }
-        return prev.map(item => {
-          if (item.medicineId === med.id) {
-            const nextQty = item.qty + 1;
-            const mult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || multiplier);
-            return { ...item, qty: nextQty, subtotal: nextQty * mult * item.price, unitMultiplier: mult };
-          }
-          return item;
-        });
-      } else {
-        const totalNeededPcs = 1 * multiplier;
-        if (totalNeededPcs > med.stock) {
-          const availableStockStr = formatStockDisplay(med);
-          setScanAlert({
-            type: 'stock_exceeded',
-            barcode: med.code,
-            medicine: med,
-            message: `Stok sediaan "${med.name}" (${availableStockStr}) tidak mencukupi untuk 1 ${med.unit}${multiplier > 1 ? ` (${multiplier} pcs)` : ''}.`,
-          });
-          return prev;
-        }
-        return [
-          ...prev,
-          {
-            medicineId: med.id,
-            medicineCode: med.code,
-            medicineName: med.name,
-            unit: med.unit,
-            price: med.price,
-            qty: 1,
-            subtotal: multiplier * med.price,
-            isPpn,
-            ppnRate: itemPpnRate,
-            itemType: med.itemType || 'obat',
-            unitMultiplier: multiplier,
-            purchasePrice: med.purchasePrice || 0,
-          },
-        ];
+      const existing = prev.find(item => cartLineKey(item) === cartLineKey(line));
+      const nextQty = existing ? existing.qty + 1 : 1;
+      const otherLinesBaseQty = prev
+        .filter(item => item.medicineId === med.id && cartLineKey(item) !== cartLineKey(line))
+        .reduce((sum, item) => sum + transactionItemBaseQuantity(item), 0);
+      const requestedBaseQty = otherLinesBaseQty + transactionItemBaseQuantity({ ...line, qty: nextQty });
+      if (requestedBaseQty > med.stock) {
+        setScanAlert({ type: 'stock_exceeded', barcode: med.code, medicine: med, message: `Stok ${med.name} tidak mencukupi untuk ${transactionItemDisplayLabel({ ...line, qty: nextQty })} dan baris item yang sama (${requestedBaseQty} pcs dasar).` });
+        return prev;
       }
+      if (existing) return prev.map(item => cartLineKey(item) === cartLineKey(line) ? { ...item, qty: nextQty, subtotal: nextQty * price } : item);
+      return [...prev, line];
     });
+    return true;
+  };
+
+  const processAddToCart = (med: Medicine) => {
+    const unit = getPrimaryUnit(med);
+    addPricedLineToCart(med, { unit, price: med.price, pricingMode: 'normal', marginPct: med.marginPct, bhpAmount: med.bhpAmount });
+  };
+
+  const openPricePicker = (med: Medicine) => {
+    setPosNotice(null);
+    setPricePickerMedicine(med);
+    setPricePickerOpen(true);
+  };
+
+  const handlePricePickerSelect = (selection: PriceSelection) => {
+    if (!pricePickerMedicine) return;
+    const { customerId } = selection;
+    if (customerId) {
+      const conflictingCustomer = cart.find(item => item.priceSource === 'customer' && item.customerId && item.customerId !== customerId);
+      if (conflictingCustomer) {
+        setPosNotice('Satu transaksi hanya dapat memakai satu customer untuk harga khusus.');
+        setPricePickerOpen(false);
+        return;
+      }
+    }
+
+    const med = pricePickerMedicine;
+    const isPpn = isMedicinePpn(med);
+    if (med.stock <= 0) {
+      setScanAlert({ type: 'out_of_stock', barcode: med.code, medicine: med, message: `Sediaan obat "${med.name}" (${med.code}) saat ini TIDAK TERSEDIA (Stok Habis).` });
+      setPricePickerOpen(false);
+      return;
+    }
+    if (getExpiredStatus(med.expiredDate).isExpired) {
+      setScanAlert({ type: 'expired', barcode: med.code, medicine: med, message: `Sediaan obat "${med.name}" (${med.code}) telah KADALUWARSA!` });
+      setPricePickerOpen(false);
+      return;
+    }
+    if (cart.length > 0 && cart[0].isPpn !== isPpn) {
+      setTaxAlert({ title: 'PENGGABUNGAN TRANSAKSI DILARANG', medicine: med, message: 'Obat PPN dan Non-PPN tidak boleh digabung!' });
+      setPricePickerOpen(false);
+      return;
+    }
+    if (cart.length === 0) {
+      setTaxType(isPpn ? 'PPN' : 'NON_PPN');
+      setTaxStatusFilter(isPpn ? 'ppn' : 'non_ppn');
+    }
+    if (!addPricedLineToCart(med, selection)) return;
+    if (customerId) {
+      setSelectedCustomerId(customerId);
+      setCustomerAutoSelected(true);
+    } else if (customerAutoSelected && !cart.some(item => item.priceSource === 'customer' && item.customerId)) {
+      setSelectedCustomerId('');
+      setCustomerAutoSelected(false);
+    }
+    setPricePickerOpen(false);
   };
 
   const addToCart = (med: Medicine): boolean => {
@@ -288,23 +574,6 @@ export const PosView: React.FC = () => {
         message: `Sediaan obat "${med.name}" (${med.code}) telah KADALUWARSA pada tanggal ${med.expiredDate}. Sediaan kadaluwarsa dilarang dijual!`,
       });
       return false;
-    }
-
-    const existingInCart = cart.find(i => i.medicineId === med.id);
-    const multiplier = med.unit === 'Lusin' ? 12 : (med.unitMultiplier || 1);
-    if (existingInCart) {
-      const nextTotalPcs = (existingInCart.qty + 1) * multiplier;
-      if (nextTotalPcs > med.stock) {
-        const availableStockStr = formatStockDisplay(med);
-        const currentCartPcs = existingInCart.qty * multiplier;
-        setScanAlert({
-          type: 'stock_exceeded',
-          barcode: med.code,
-          medicine: med,
-          message: `Jumlah sediaan "${med.name}" di keranjang (${existingInCart.qty} ${med.unit}${multiplier > 1 ? ` = ${currentCartPcs} pcs` : ''}) jika ditambah 1 ${med.unit} lagi (${nextTotalPcs} pcs) melebihi batas stok apotek (${availableStockStr}).`,
-        });
-        return false;
-      }
     }
 
     // STRICT PERPAJAKAN SEPARATION: Obat PPN 11% & Non-PPN tidak boleh digabung dalam 1 transaksi
@@ -349,6 +618,14 @@ export const PosView: React.FC = () => {
       }
     }
 
+    const units = getMedicineUnits(med);
+    const hasUnitPrices = units.length > 1;
+    const hasCustomPrices = (med.customPrices || []).some(price => price.isActive !== false && Number(price.totalPrice) > 0);
+    if (hasUnitPrices || hasCustomPrices || getNormalCustomerPrices(med).length > 0) {
+      openPricePicker(med);
+      return true;
+    }
+
     processAddToCart(med);
     return true;
   };
@@ -388,79 +665,71 @@ export const PosView: React.FC = () => {
     }
   };
 
-  const updateCartQty = (medicineId: string, delta: number) => {
-    const med = medicines.find(m => m.id === medicineId);
+  const updateCartQty = (lineId: string, delta: number) => {
+    const line = cart.find(item => cartLineKey(item) === lineId);
+    const med = line ? medicines.find(m => m.id === line.medicineId) : undefined;
     if (!med) return;
 
-    setCart(prev =>
-      prev
-        .map(item => {
-          if (item.medicineId === medicineId) {
-            const newQty = item.qty + delta;
-            if (newQty <= 0) return null; // remove item
-            const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1);
-            const totalNeededPcs = newQty * multiplier;
-            if (totalNeededPcs > med.stock) {
-              const availableStockStr = formatStockDisplay(med);
-              setScanAlert({
-                type: 'stock_exceeded',
-                barcode: med.code,
-                medicine: med,
-                message: `Permintaan ${newQty} ${item.unit}${multiplier > 1 ? ` (${totalNeededPcs} pcs)` : ''} melebihi sisa stok apotek yang tersedia (${availableStockStr}).`,
-              });
-              return item;
-            }
-            return { ...item, qty: newQty, subtotal: newQty * multiplier * item.price, unitMultiplier: multiplier };
-          }
-          return item;
-        })
-        .filter(Boolean) as TransactionItem[]
-    );
+    const newQty = line.qty + delta;
+    if (newQty <= 0) {
+      removeFromCart(lineId);
+      return;
+    }
+    const totalNeededPcs = cart.reduce((sum, item) => {
+      if (item.medicineId !== med.id) return sum;
+      return sum + transactionItemBaseQuantity(cartLineKey(item) === lineId ? { ...item, qty: newQty } : item);
+    }, 0);
+    if (totalNeededPcs > med.stock) {
+      const availableStockStr = formatStockDisplay(med);
+      setScanAlert({
+        type: 'stock_exceeded',
+        barcode: med.code,
+        medicine: med,
+        message: `Permintaan seluruh baris ${med.name} mencapai ${totalNeededPcs} pcs dasar dan melebihi sisa stok apotek (${availableStockStr}).`,
+      });
+      return;
+    }
+    setCart(prev => prev.map(item => cartLineKey(item) === lineId ? { ...item, qty: newQty, subtotal: newQty * item.price } : item));
   };
 
   // Input qty is in total pcs (e.g. 12 for 1 Lusin) — convert to whole units internally
-  const setCartItemQty = (medicineId: string, targetPcs: number) => {
-    const med = medicines.find(m => m.id === medicineId);
+  const setCartItemQty = (lineId: string, targetQtyInput: number) => {
+    const line = cart.find(item => cartLineKey(item) === lineId);
+    const med = line ? medicines.find(m => m.id === line.medicineId) : undefined;
     if (!med) return;
 
-    if (isNaN(targetPcs) || targetPcs <= 0) {
-      removeFromCart(medicineId);
+    if (isNaN(targetQtyInput) || targetQtyInput <= 0) {
+      removeFromCart(lineId);
       return;
     }
 
-    setCart(prev =>
-      prev.map(item => {
-        if (item.medicineId === medicineId) {
-          const multiplier = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1);
-          let targetQty = Math.floor((targetPcs + 1e-6) / multiplier);
-          if (targetQty <= 0) targetQty = 1; // at least one full unit
-          const totalNeededPcs = targetQty * multiplier;
-          if (totalNeededPcs > med.stock) {
-            const availableStockStr = formatStockDisplay(med);
-            setScanAlert({
-              type: 'stock_exceeded',
-              barcode: med.code,
-              medicine: med,
-              message: `Permintaan ${targetPcs} pcs (${targetQty} ${item.unit}) melebihi sisa stok apotek yang tersedia (${availableStockStr}).`,
-            });
-            const maxPossibleQty = Math.floor(med.stock / multiplier);
-            if (maxPossibleQty <= 0) return item;
-            return { ...item, qty: maxPossibleQty, subtotal: maxPossibleQty * multiplier * item.price, unitMultiplier: multiplier };
-          }
-          return { ...item, qty: targetQty, subtotal: targetQty * multiplier * item.price, unitMultiplier: multiplier };
-        }
-        return item;
-      })
-    );
+    const targetQty = Math.max(1, Math.floor(targetQtyInput));
+    const totalNeededPcs = cart.reduce((sum, item) => {
+      if (item.medicineId !== med.id) return sum;
+      return sum + transactionItemBaseQuantity(cartLineKey(item) === lineId ? { ...item, qty: targetQty } : item);
+    }, 0);
+    if (totalNeededPcs > med.stock) {
+      const availableStockStr = formatStockDisplay(med);
+      setScanAlert({
+        type: 'stock_exceeded',
+        barcode: med.code,
+        medicine: med,
+        message: `Permintaan seluruh baris ${med.name} mencapai ${totalNeededPcs} pcs dasar dan melebihi sisa stok apotek (${availableStockStr}).`,
+      });
+      return;
+    }
+    setCart(prev => prev.map(item => cartLineKey(item) === lineId ? { ...item, qty: targetQty, subtotal: targetQty * item.price } : item));
   };
 
-  const removeFromCart = (medicineId: string) => {
-    setCart(prev => prev.filter(item => item.medicineId !== medicineId));
+  const removeFromCart = (lineId: string) => {
+    setCart(prev => prev.filter(item => cartLineKey(item) !== lineId));
   };
 
   const clearCart = () => {
     setCart([]);
     setPaymentAmount(0);
+    setSelectedCustomerId('');
+    setCustomerAutoSelected(false);
     setTaxStatusFilter('all');
   };
 
@@ -528,19 +797,20 @@ export const PosView: React.FC = () => {
   // Submit POS Transaction
   const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPosNotice(null);
 
     if (cart.length === 0) {
-      alert('Keranjang belanja masih kosong! Silakan pilih obat terlebih dahulu.');
+      setPosNotice('Keranjang belanja masih kosong! Silakan pilih obat terlebih dahulu.');
       return;
     }
 
     if (isPrescription && !selectedDoctorId) {
-      alert('⚠️ WAJIB PILIH DOKTER:\n\nTransaksi resep mewajibkan pemilihan Dokter Pemberi Resep terlebih dahulu!');
+      setPosNotice('⚠️ WAJIB PILIH DOKTER:\n\nTransaksi resep mewajibkan pemilihan Dokter Pemberi Resep terlebih dahulu!');
       return;
     }
 
     if (paymentAmount < totalAmount) {
-      alert(
+      setPosNotice(
         `⚠️ PEMBAYARAN KURANG!\n\nTotal belanja: ${formatRupiah(
           totalAmount
         )}\nNominal dibayar: ${formatRupiah(paymentAmount)}\nKekurangan: ${formatRupiah(
@@ -575,6 +845,7 @@ export const PosView: React.FC = () => {
     // Reset POS form
     setCart([]);
     setSelectedCustomerId('');
+    setCustomerAutoSelected(false);
     setSelectedDoctorId('');
     setIsPrescription(false);
     setPrescriptionNote('');
@@ -587,7 +858,7 @@ export const PosView: React.FC = () => {
   const handleQuickAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickCustName || !quickCustPhone) {
-      alert('Mohon isi nama dan nomor HP.');
+      setPosNotice('Mohon isi nama dan nomor HP.');
       return;
     }
     const newC = await addCustomer({
@@ -596,6 +867,7 @@ export const PosView: React.FC = () => {
       status: 'Aktif',
     });
     setSelectedCustomerId(newC.id);
+    setCustomerAutoSelected(false);
     setIsQuickCustOpen(false);
     setQuickCustName('');
     setQuickCustPhone('');
@@ -641,6 +913,13 @@ export const PosView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {posNotice && (
+        <InlineNotice
+          message={posNotice}
+          onDismiss={() => setPosNotice(null)}
+        />
+      )}
 
       {/* Mobile Responsive Navigation Switcher (Hidden on Desktop) */}
       <div className="flex items-center gap-2 p-1 bg-slate-200/80 rounded-xl lg:hidden text-xs font-bold">
@@ -960,7 +1239,7 @@ export const PosView: React.FC = () => {
                 </div>
               ) : (
                 cart.map(item => (
-                  <div key={item.medicineId} className="py-2.5 flex items-center justify-between gap-2 text-xs">
+                  <div key={cartLineKey(item)} className="py-2.5 flex items-center justify-between gap-2 text-xs">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <h5 className="font-bold text-slate-900 truncate">{item.medicineName}</h5>
@@ -975,7 +1254,7 @@ export const PosView: React.FC = () => {
                         )}
                       </div>
                       <p className="text-[10px] text-slate-500 flex items-center gap-1.5 flex-wrap">
-                        <span>{formatRupiah(item.price)} / {(item.unit === 'Lusin' || (item.unitMultiplier && item.unitMultiplier > 1)) ? 'pcs' : item.unit}</span>
+                        <span>{transactionItemDisplayLabel(item)} @ {formatRupiah(item.price)}</span>
                       </p>
                     </div>
 
@@ -983,7 +1262,7 @@ export const PosView: React.FC = () => {
                       <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
                         <button
                           type="button"
-                          onClick={() => updateCartQty(item.medicineId, -1)}
+                          onClick={() => updateCartQty(cartLineKey(item), -1)}
                           className="p-1 hover:bg-slate-200 text-slate-600 transition-colors"
                           title="Kurangi 1"
                         >
@@ -992,13 +1271,13 @@ export const PosView: React.FC = () => {
                         <input
                           type="number"
                           min="1"
-                          value={item.qty * (item.unit === 'Lusin' ? 12 : (item.unitMultiplier || 1))}
-                          onChange={e => setCartItemQty(item.medicineId, parseInt(e.target.value) || 0)}
+                          value={item.qty}
+                          onChange={e => setCartItemQty(cartLineKey(item), parseInt(e.target.value) || 0)}
                           className="w-11 text-center font-extrabold text-slate-900 text-xs bg-white border-x border-slate-200 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                         />
                         <button
                           type="button"
-                          onClick={() => updateCartQty(item.medicineId, 1)}
+                          onClick={() => updateCartQty(cartLineKey(item), 1)}
                           className="p-1 hover:bg-slate-200 text-slate-600 transition-colors"
                           title="Tambah 1"
                         >
@@ -1012,7 +1291,7 @@ export const PosView: React.FC = () => {
 
                       <button
                         type="button"
-                        onClick={() => removeFromCart(item.medicineId)}
+                        onClick={() => removeFromCart(cartLineKey(item))}
                         className="text-slate-400 hover:text-rose-600 p-1"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1138,20 +1417,14 @@ export const PosView: React.FC = () => {
                     <UserPlus className="w-3 h-3" /> Member Baru
                   </button>
                 </div>
-                <select
+                <CustomerAutocomplete
+                  customerIndex={customerIndex}
                   value={selectedCustomerId}
-                  onChange={e => setSelectedCustomerId(e.target.value)}
-                  className="w-full px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                >
-                  <option key="" value="">-- Customer Umum (Non-Member) --</option>
-                  {customers
-                    .filter(c => c.status === 'Aktif')
-                    .map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.memberNo})
-                      </option>
-                    ))}
-                </select>
+                  onChange={customerId => {
+                    setSelectedCustomerId(customerId);
+                    setCustomerAutoSelected(false);
+                  }}
+                />
               </div>
 
               {/* Prescription Toggle & Doctor Selector */}
@@ -1314,7 +1587,7 @@ export const PosView: React.FC = () => {
                 {/* Breakdown Subtotal & Biaya */}
                 <div className="space-y-1.5 text-xs pb-2 border-b border-emerald-800/80">
                   <div className="flex justify-between items-center text-emerald-200">
-                    <span>Subtotal Sediaan ({cart.reduce((sum, i) => sum + i.qty * (i.unit === 'Lusin' ? 12 : (i.unitMultiplier || 1)), 0)} pcs):</span>
+                    <span>Subtotal Sediaan ({cart.reduce((sum, i) => sum + transactionItemBaseQuantity(i), 0)} pcs dasar):</span>
                     <span className="font-mono font-bold text-white">{formatRupiah(rawCartSubtotal)}</span>
                   </div>
 
@@ -1608,6 +1881,83 @@ export const PosView: React.FC = () => {
           </div>
         </div>
       </div>
+      )}
+
+      {/* Price Picker Modal for Customer-Specific Pricing */}
+      {pricePickerOpen && pricePickerMedicine && (
+        <div className="fixed inset-0 z-[55] bg-slate-900/75 backdrop-blur-xs overflow-y-auto">
+          <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-6">
+            <div className="bg-white rounded-2xl max-w-sm w-full p-5 space-y-4 border border-slate-200 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+                  <Tag className="w-4 h-4 text-indigo-600" />
+                  Pilih Harga Jual
+                </h3>
+                <button type="button" onClick={() => setPricePickerOpen(false)} className="p-1 rounded-lg hover:bg-slate-100">
+                  <X className="w-4 h-4 text-slate-400" />
+                </button>
+              </div>
+              <div className="text-xs text-slate-600">
+                <span className="font-bold text-slate-800">{pricePickerMedicine.name}</span>
+                <span className="text-slate-400 ml-1">({pricePickerMedicine.code})</span>
+              </div>
+              <div className="space-y-2">
+                {(() => {
+                  const primary = getPrimaryUnit(pricePickerMedicine);
+                  const normalCustomers = getNormalCustomerPrices(pricePickerMedicine);
+                   const units = getMedicineUnits(pricePickerMedicine);
+                   const unitFor = (price: MedicineCustomPrice) => units.find(unit => unit.id === price.unitId || unit.unit === price.unitName) || primary;
+                    const unitNormalPrice = (unit: MedicineUnit) => Number(unit.sellingPrice || 0);
+                   const unitCustomerPrices = (unit: MedicineUnit) => unit === primary ? normalCustomers : (unit.customerPrices || []);
+                  return <>
+                    <button
+                      type="button"
+                       onClick={() => handlePricePickerSelect({ unit: primary, price: pricePickerMedicine.price, pricingMode: 'normal', marginPct: pricePickerMedicine.marginPct, bhpAmount: pricePickerMedicine.bhpAmount })}
+                      className="w-full p-3 rounded-xl border-2 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-left transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div><span className="text-xs font-bold text-slate-700">Harga Normal</span><span className="block text-[10px] text-slate-500">1 {primary.unit}</span></div>
+                        <span className="text-right text-sm font-extrabold text-emerald-700">{formatRupiah(pricePickerMedicine.price)}</span>
+                      </div>
+                    </button>
+                    {normalCustomers.length > 0 && (
+                      <CustomerPriceAutocomplete
+                        prices={normalCustomers}
+                        customerIndex={customerIndex}
+                        label="Harga Customer Normal"
+                         onSelect={(customerPrice, customer) => handlePricePickerSelect({ unit: primary, price: customerPrice.price, pricingMode: 'normal', customerId: customerPrice.customerId, customerName: customer?.name, marginPct: customerPrice.marginPct, bhpAmount: customerPrice.bhpAmount })}
+                      />
+                    )}
+                    {units.filter(unit => unit.id !== primary.id && (unitNormalPrice(unit) > 0 || unitCustomerPrices(unit).length > 0)).map(unit => (
+                      <div key={`unit-price-${unit.id}`} className="space-y-1.5 rounded-xl border border-slate-200 p-2">
+                         {unitNormalPrice(unit) > 0 && <button type="button" onClick={() => handlePricePickerSelect({ unit, price: unitNormalPrice(unit), pricingMode: 'normal', marginPct: unit.marginPct, bhpAmount: unit.bhpAmount })} className="w-full p-2.5 rounded-lg border-2 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-left transition-colors">
+                          <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-700">Harga Normal <span className="block text-[10px] text-slate-500">1 {unit.unit}</span></span><span className="text-sm font-extrabold text-emerald-700">{formatRupiah(unitNormalPrice(unit))}</span></div>
+                        </button>}
+                        {unitCustomerPrices(unit).length > 0 && <CustomerPriceAutocomplete prices={unitCustomerPrices(unit)} customerIndex={customerIndex} label={`Harga Customer • ${unit.unit}`} onSelect={(customerPrice, customer) => handlePricePickerSelect({ unit, price: customerPrice.price, pricingMode: 'normal', customerId: customerPrice.customerId, customerName: customer?.name, marginPct: customerPrice.marginPct, bhpAmount: customerPrice.bhpAmount })} />}
+                      </div>
+                    ))}
+                    {(pricePickerMedicine.customPrices || []).filter(price => price.isActive !== false).map((customPrice, index) => {
+                      const unit = unitFor(customPrice);
+                      return <div key={customPrice.id || `custom-${index}`} className="space-y-1.5 rounded-xl border border-slate-200 p-2">
+                         <button type="button" onClick={() => handlePricePickerSelect({ unit, price: customPrice.totalPrice, pricingMode: 'custom', customPrice, marginPct: customPrice.marginPct, bhpAmount: customPrice.bhpAmount })} className="w-full p-2.5 rounded-lg border-2 border-amber-300 bg-amber-50 hover:bg-amber-100 text-left transition-colors">
+                          <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-700">Harga Custom <span className="block text-[10px] text-slate-500">{customPrice.quantity} {unit.unit}</span></span><span className="text-sm font-extrabold text-amber-700">{formatRupiah(customPrice.totalPrice)}</span></div>
+                        </button>
+                        {(customPrice.customerPrices || []).length > 0 && (
+                          <CustomerPriceAutocomplete
+                            prices={customPrice.customerPrices || []}
+                            customerIndex={customerIndex}
+                            label={`Harga Customer • ${customPrice.quantity} ${unit.unit}`}
+                             onSelect={(customerPrice, customer) => handlePricePickerSelect({ unit, price: customerPrice.price, pricingMode: 'custom', customPrice, customerId: customerPrice.customerId, customerName: customer?.name, marginPct: customerPrice.marginPct, bhpAmount: customerPrice.bhpAmount })}
+                          />
+                        )}
+                      </div>;
+                    })}
+                  </>;
+                })()}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Barcode / Stock / Expiry Popup Alert Modal */}

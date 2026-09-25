@@ -27,6 +27,15 @@ export const initialSettings: PharmacySettings = {
   defaultPpnIncluded: true,
   printerName: '',
   paperWidth: '58mm',
+  marginTopMm: 0,
+  marginRightMm: 0,
+  marginBottomMm: 0,
+  marginLeftMm: 0,
+  printerFontSize: 7,
+  printerLineHeight: 1.2,
+  printerLabelWidthPct: 56,
+  printerColumnGapMm: 2,
+  printerAmountAlignment: 'right',
 };
 
 export const initialUsers: User[] = [

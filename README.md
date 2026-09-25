@@ -5,7 +5,7 @@ Aplikasi kasir & operasional apotek. Satu codebase untuk **dua mode**:
 | Mode | Cara menjalankan | Database |
 | ---- | ---------------- | -------- |
 | **Web** | `npm run dev` (frontend) + `npm run dev:server` (API, port 3001) | `./apotek.db` |
-| **Desktop (Electron / Windows .exe)** | `npm run electron:dev` (dev) atau `npm run electron:dist` (produksi) | `%APPDATA%/apotek-azzainiyah/apotek.db` |
+| **Desktop (Electron / Windows .exe)** | `npm run electron:dev` (dev) atau `npm run electron:dist` (produksi) | Default `%APPDATA%/apotek-azzainiyah/apotek.db`, dapat dipindahkan dari Pengaturan ke folder lain |
 
 Keduanya memakai API + SQLite yang sama (`src/server/app.ts`), jadi tidak ada
 fork code — perubahan di satu mode otomatis berlaku di mode lain.
@@ -72,14 +72,24 @@ Di menu **Pengaturan → Printer Thermal & Cetak Otomatis** (khusus admin):
 
 Pengaturan ini disimpan di tabel `settings` database, jadi bertahan antar-version.
 
+### Lokasi penyimpanan data desktop
+
+Admin dapat membuka **Pengaturan → Lokasi Penyimpanan Data → Pindahkan Data ke Folder Lain**
+untuk memilih folder pada partisi lain, misalnya `D:\DataApotek`. Aplikasi akan
+memverifikasi hasil copy SQLite, menyimpan backup database lama dengan suffix
+timestamp, lalu memakai lokasi baru setelah reload. File pointer lokasi disimpan
+sebagai metadata kecil di `%APPDATA%/apotek-azzainiyah/storage-location.json`;
+database lama tidak dihapus.
+
 Pada mode web, fitur printer menampilkan catatan bahwa fungsinya hanya tersedia
 di aplikasi desktop (struk web tetap dicetak lewat dialog browser).
 
 ## 4. Upgrade Aman (tidak merusak SQLite)
 
-Database **tidak pernah disimpan di folder aplikasi**, melainkan di
-`%APPDATA%/apotek-azzainiyah/apotek.db`. Mengganti installer versi baru tidak
-menyentuh file ini.
+Database **tidak pernah disimpan di folder aplikasi**. Lokasi default adalah
+`%APPDATA%/apotek-azzainiyah/apotek.db`, tetapi dapat dipindahkan ke folder custom
+melalui Pengaturan. Mengganti installer versi baru tidak menyentuh database
+aktif maupun backup.
 
 Skema dimigrasikan **secara aditif** saat aplikasi dinyalakan
 (`applyMigrations` di `src/server/app.ts`):

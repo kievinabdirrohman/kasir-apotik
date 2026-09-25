@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, startTransition } from 'react';
 import {
   Medicine,
   Customer,
@@ -10,13 +10,15 @@ import {
   ActiveTab,
   TransactionItem,
   CashFlow,
+  MedicineCustomerPrice,
 } from '../types';
 import {
   initialUsers,
   initialSettings,
 } from '../data/initialData';
-import { getDaysUntilExpired, getWIBDateTimeString, getWIBDateString } from '../utils/formatters';
+import { getDaysUntilExpired, getWIBDateTimeString, getWIBDateString, sortByUpdatedAt } from '../utils/formatters';
 import { validatePasswordStrength } from '../utils/authUtils';
+import { transactionItemCost } from '../utils/unitConversion';
 import {
   initializeApp,
   resetData,
@@ -40,6 +42,11 @@ import {
   updateSettings as apiUpdateSettings,
   addCashFlow as apiAddCashFlow,
   deleteCashFlow as apiDeleteCashFlow,
+  getMedicineCustomerPrices,
+  syncCustomerPrices as apiSyncCustomerPrices,
+  type CustomerPriceSyncSummary,
+  addMedicineCustomerPrice as apiAddMedicineCustomerPrice,
+  deleteMedicineCustomerPrice as apiDeleteMedicineCustomerPrice,
 } from '../services/api';
 
 interface AppContextType {
@@ -69,6 +76,7 @@ interface AppContextType {
   stockHistory: StockHistory[];
   settings: PharmacySettings;
   cashFlows: CashFlow[];
+  medicineCustomerPrices: MedicineCustomerPrice[];
 
   // CashFlow Actions
   addCashFlow: (cashFlow: Omit<CashFlow, 'id' | 'date' | 'recordedBy'>) => Promise<void>;
@@ -76,9 +84,15 @@ interface AppContextType {
 
   // Medicine Actions
   addMedicine: (medicine: Omit<Medicine, 'id'>) => Promise<Medicine>;
-  updateMedicine: (id: string, medicine: Partial<Medicine>) => Promise<void>;
+  updateMedicine: (id: string, medicine: Partial<Medicine>, stockMutationNote?: string) => Promise<void>;
   deleteMedicine: (id: string) => Promise<void>;
   restoreMedicine: (id: string) => Promise<void>;
+
+  // Medicine Customer Prices
+  addMedicineCustomerPrice: (p: Omit<MedicineCustomerPrice, 'id'>) => Promise<MedicineCustomerPrice>;
+  deleteMedicineCustomerPrice: (id: string) => Promise<void>;
+  getCustomerPricesForMedicine: (medicineId: string) => MedicineCustomerPrice[];
+  syncCustomerPrices: () => Promise<CustomerPriceSyncSummary>;
 
   // Stock In & Adjustment Actions
   addStock: (
@@ -91,11 +105,12 @@ interface AppContextType {
       sellingPrice?: number;
       ppnAmount?: number;
       marginPct?: number;
+      noBatch?: string;
       updateMedicineMaster?: boolean;
     }
   ) => Promise<void>;
-  adjustStock: (medicineId: string, newStock: number, note: string) => Promise<void>;
-  bulkAdjustStock: (adjustments: { medicineId: string; newStock: number; note: string }[]) => Promise<void>;
+  adjustStock: (medicineId: string, newStock: number, note: string, noBatch?: string) => Promise<void>;
+  bulkAdjustStock: (adjustments: { medicineId: string; newStock: number; note: string; noBatch?: string }[]) => Promise<void>;
   bulkAddStock: (
     items: {
       medicineId: string;
@@ -198,7 +213,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [settings, setSettings] = useState<PharmacySettings>(initialSettings);
 
-  const [medicines, setMedicines] = useState<Medicine[]>([]);
+  const [medicines, setMedicinesState] = useState<Medicine[]>([]);
+  const setMedicines = (next: React.SetStateAction<Medicine[]>) => {
+    setMedicinesState(current => sortByUpdatedAt(typeof next === 'function' ? next(current) : next));
+  };
 
   const [customers, setCustomers] = useState<Customer[]>([]);
 
@@ -206,9 +224,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
-  const [stockHistory, setStockHistory] = useState<StockHistory[]>([]);
+  const [stockHistory, setStockHistoryState] = useState<StockHistory[]>([]);
+  const setStockHistory = (next: React.SetStateAction<StockHistory[]>) => {
+    setStockHistoryState(current => sortByUpdatedAt(typeof next === 'function' ? next(current) : next));
+  };
 
   const [cashFlows, setCashFlows] = useState<CashFlow[]>([]);
+
+  const [medicineCustomerPrices, setMedicineCustomerPrices] = useState<MedicineCustomerPrice[]>([]);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -247,6 +270,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setStockHistory(seeded.stockHistory);
           setCashFlows(seeded.cashFlows);
           setSettings(seeded.settings);
+          setMedicineCustomerPrices(seeded.medicineCustomerPrices);
         } else {
           setMedicines(data.medicines);
           setCustomers(data.customers);
@@ -256,6 +280,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setStockHistory(data.stockHistory);
           setCashFlows(data.cashFlows);
           setSettings(data.settings);
+          setMedicineCustomerPrices(data.medicineCustomerPrices);
         }
       } catch (err: unknown) {
         setApiError(err instanceof Error ? err.message : String(err));
@@ -302,6 +327,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addMedicine = async (medData: Omit<Medicine, 'id'>): Promise<Medicine> => {
     const created = await apiAddMedicine(medData);
     setMedicines(prev => [created, ...prev]);
+    if (medData.units) setMedicineCustomerPrices(await getMedicineCustomerPrices());
     // Record initial stock entry locally (no POST /api/stock_history endpoint)
     if (medData.stock > 0) {
       const historyItem: StockHistory = {
@@ -328,9 +354,59 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return created;
   };
 
-  const updateMedicine = async (id: string, updatedFields: Partial<Medicine>): Promise<void> => {
+  const updateMedicine = async (
+    id: string,
+    updatedFields: Partial<Medicine>,
+    stockMutationNote?: string
+  ): Promise<void> => {
+    const target = medicines.find(m => m.id === id);
+    const prevStock = target?.stock ?? 0;
+    const isStockChanged =
+      updatedFields.stock !== undefined &&
+      target !== undefined &&
+      Number(updatedFields.stock) !== prevStock;
+
     const updated = await apiUpdateMedicine(id, updatedFields);
-    setMedicines(prev => prev.map(m => m.id === id ? updated : m));
+    setMedicines(prev => prev.map(m => (m.id === id ? updated : m)));
+    if (updatedFields.units) setMedicineCustomerPrices(await getMedicineCustomerPrices());
+
+    if (isStockChanged && target) {
+      const newStock = updated.stock !== undefined ? updated.stock : Number(updatedFields.stock);
+      const diff = newStock - prevStock;
+      const itType = updated.itemType || target.itemType || 'obat';
+      const isPpn =
+        (updated.isPpnIncluded ?? target.isPpnIncluded ?? true) &&
+        (updated.ppnRate ?? target.ppnRate ?? 11) > 0;
+
+      const historyItem: Omit<StockHistory, 'id'> = {
+        medicineId: target.id,
+        medicineCode: updated.code || target.code,
+        medicineName: updated.name || target.name,
+        type: 'penyesuaian',
+        amount: diff,
+        prevStock,
+        newStock,
+        date: getWIBDateTimeString(),
+        note:
+          stockMutationNote?.trim() ||
+          `Koreksi stok langsung via edit data ${itType === 'non_obat' ? 'barang non-obat' : 'obat'} (${prevStock} → ${newStock})`,
+        user: currentUser?.name || 'Sistem',
+        taxType: isPpn ? 'PPN' : 'NON_PPN',
+        purchasePrice: updated.purchasePrice ?? target.purchasePrice,
+        sellingPrice: updated.price ?? target.price,
+        marginPct: updated.marginPct ?? target.marginPct,
+        bhpAmount: updated.bhpAmount ?? target.bhpAmount,
+        noBatch: updated.noBatch ?? target.noBatch,
+        itemType: itType,
+      };
+
+      try {
+        const savedHistory = await addStockHistory(historyItem);
+        setStockHistory(prev => [savedHistory, ...prev]);
+      } catch (err) {
+        console.error('Failed to record stock history on updateMedicine:', err);
+      }
+    }
   };
 
   // Safe delete: server handles soft/hard delete logic; refresh for authoritative state
@@ -345,6 +421,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setMedicines(prev => prev.map(m => m.id === id ? updated : m));
   };
 
+  // Medicine Customer Prices Actions
+  const addMedicineCustomerPrice = async (data: Omit<MedicineCustomerPrice, 'id'>): Promise<MedicineCustomerPrice> => {
+    const created = await apiAddMedicineCustomerPrice(data);
+    setMedicineCustomerPrices(prev => {
+      const existing = prev.find(p => p.medicineId === data.medicineId && p.customerId === data.customerId && p.unitId === data.unitId);
+      if (existing) {
+        return prev.map(p => p.id === existing.id ? created : p);
+      }
+      return [...prev, created];
+    });
+    return created;
+  };
+
+  const deleteMedicineCustomerPrice = async (id: string): Promise<void> => {
+    await apiDeleteMedicineCustomerPrice(id);
+    setMedicineCustomerPrices(prev => prev.filter(p => p.id !== id));
+  };
+
+  const getCustomerPricesForMedicine = (medicineId: string): MedicineCustomerPrice[] => {
+    return medicineCustomerPrices.filter(p => p.medicineId === medicineId);
+  };
+
+  const syncCustomerPrices = async (): Promise<CustomerPriceSyncSummary> => {
+    const summary = await apiSyncCustomerPrices();
+    try {
+      const [freshMedicines, freshCustomerPrices] = await Promise.all([getMedicines(), getMedicineCustomerPrices()]);
+      startTransition(() => {
+        setMedicines(freshMedicines);
+        setMedicineCustomerPrices(freshCustomerPrices);
+      });
+    } catch (refreshError) {
+      console.error('Sinkronisasi harga berhasil, tetapi refresh harga customer gagal:', refreshError);
+    }
+    return summary;
+  };
+
   // Stock Actions
   const addStock = async (
     medicineId: string,
@@ -357,6 +469,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       sellingPrice?: number;
       ppnAmount?: number;
       marginPct?: number;
+      noBatch?: string;
+      inputUnitId?: string;
+      inputUnit?: string;
+      inputQty?: number;
+      inputMultiplier?: number;
       updateMedicineMaster?: boolean;
     }
   ): Promise<void> => {
@@ -367,8 +484,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newStock = prevStock + amount;
 
     const updateData: Partial<Medicine> = { stock: newStock };
+    if (details?.noBatch) {
+      updateData.noBatch = details.noBatch;
+    }
     if (details?.updateMedicineMaster) {
-      if (details.purchasePrice !== undefined && details.purchasePrice >= 0) updateData.purchasePrice = details.purchasePrice;
+      if (details.purchasePrice !== undefined && details.purchasePrice >= 0) {
+        updateData.purchasePrice = details.inputMultiplier
+          ? details.purchasePrice * details.inputMultiplier
+          : details.purchasePrice;
+      }
       if (details.bhpAmount !== undefined && details.bhpAmount >= 0) updateData.bhpAmount = details.bhpAmount;
       if (details.marginPct !== undefined) updateData.marginPct = details.marginPct;
       if (details.sellingPrice !== undefined && details.sellingPrice > 0) updateData.price = details.sellingPrice;
@@ -377,7 +501,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateData.isPpnIncluded = isPpn;
         updateData.ppnRate = isPpn ? 11 : 0;
 
-        const purchase = details.purchasePrice ?? target.purchasePrice ?? 0;
+        const purchase = details.purchasePrice !== undefined
+          ? details.purchasePrice * (details.inputMultiplier || 1)
+          : (target.purchasePrice ?? 0);
         const sell = details.sellingPrice ?? target.price ?? 0;
 
         if (isPpn) {
@@ -414,6 +540,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         sellingPrice: details?.sellingPrice,
         ppnAmount: details?.ppnAmount,
         marginPct: details?.marginPct,
+        bhpAmount: details?.bhpAmount,
+        noBatch: details?.noBatch ?? target.noBatch,
+        inputUnitId: details?.inputUnitId,
+        inputUnit: details?.inputUnit,
+        inputQty: details?.inputQty,
+        inputMultiplier: details?.inputMultiplier,
         itemType: target.itemType || 'obat',
       };
       const saved = await addStockHistory(historyItem);
@@ -423,7 +555,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const adjustStock = async (medicineId: string, newStock: number, note: string): Promise<void> => {
+  const adjustStock = async (medicineId: string, newStock: number, note: string, noBatch?: string): Promise<void> => {
     const target = medicines.find(m => m.id === medicineId);
     if (!target) return;
 
@@ -431,7 +563,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const diff = newStock - prevStock;
 
     try {
-      const updated = await apiUpdateMedicine(medicineId, { stock: newStock });
+      const updateData: Partial<Medicine> = { stock: newStock };
+      if (noBatch) updateData.noBatch = noBatch;
+      const updated = await apiUpdateMedicine(medicineId, updateData);
       setMedicines(prev => prev.map(m => m.id === medicineId ? updated : m));
 
       const isPpn = (target.isPpnIncluded ?? true) && (target.ppnRate ?? 11) > 0;
@@ -449,6 +583,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         taxType: isPpn ? 'PPN' : 'NON_PPN',
         purchasePrice: target.purchasePrice,
         sellingPrice: target.price,
+        noBatch: noBatch ?? target.noBatch,
       };
       const saved = await addStockHistory(historyItem);
       setStockHistory(prev => [saved, ...prev]);
@@ -457,7 +592,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const bulkAdjustStock = async (adjustments: { medicineId: string; newStock: number; note: string }[]): Promise<void> => {
+  const bulkAdjustStock = async (adjustments: { medicineId: string; newStock: number; note: string; noBatch?: string }[]): Promise<void> => {
     if (adjustments.length === 0) return;
 
     const dateStr = getWIBDateTimeString();
@@ -467,7 +602,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const m = medicines.find(med => med.id === adj.medicineId);
       if (!m) continue;
       try {
-        const updated = await apiUpdateMedicine(adj.medicineId, { stock: adj.newStock });
+        const updateData: Partial<Medicine> = { stock: adj.newStock };
+        if (adj.noBatch) updateData.noBatch = adj.noBatch;
+        const updated = await apiUpdateMedicine(adj.medicineId, updateData);
         const prevStock = m.stock;
         const diff = adj.newStock - prevStock;
         const isPpn = (m.isPpnIncluded ?? true) && (m.ppnRate ?? 11) > 0;
@@ -488,6 +625,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           taxType: isPpn ? 'PPN' : 'NON_PPN',
           purchasePrice: m.purchasePrice,
           sellingPrice: m.price,
+          noBatch: adj.noBatch ?? m.noBatch,
         };
         const saved = await addStockHistory(historyData);
         newHistoryItems.push(saved);
@@ -512,6 +650,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       sellingPrice?: number;
       ppnAmount?: number;
       marginPct?: number;
+      noBatch?: string;
       updateMedicineMaster?: boolean;
     }[]
   ): Promise<void> => {
@@ -528,6 +667,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const newStock = prevStock + it.amount;
 
       const updateData: Partial<Medicine> = { stock: newStock };
+      if (it.noBatch) {
+        updateData.noBatch = it.noBatch;
+      }
       if (it.updateMedicineMaster) {
         if (it.purchasePrice !== undefined && it.purchasePrice >= 0) updateData.purchasePrice = it.purchasePrice;
         if (it.bhpAmount !== undefined && it.bhpAmount >= 0) updateData.bhpAmount = it.bhpAmount;
@@ -575,6 +717,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           sellingPrice: it.sellingPrice,
           ppnAmount: it.ppnAmount,
           marginPct: it.marginPct,
+          bhpAmount: it.bhpAmount,
+          noBatch: it.noBatch ?? target.noBatch,
           itemType: target.itemType || 'obat',
         };
         const saved = await addStockHistory(historyData);
@@ -595,6 +739,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const memberNo = `MBR-${String(memberCount).padStart(3, '0')}`;
     const created = await apiAddCustomer({ ...data, memberNo, totalSpent: 0, totalTransactions: 0, createdAt: getWIBDateString() });
     setCustomers(prev => [created, ...prev]);
+    try {
+      const [freshMedicines, freshCustomerPrices] = await Promise.all([getMedicines(), getMedicineCustomerPrices()]);
+      setMedicines(freshMedicines);
+      setMedicineCustomerPrices(freshCustomerPrices);
+    } catch (refreshError) {
+      console.error('Customer berhasil dibuat, tetapi refresh harga customer gagal:', refreshError);
+    }
     return created;
   };
 
@@ -738,13 +889,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     items.forEach(item => {
       const med = medicines.find(m => m.id === item.medicineId);
       const itType = item.itemType || med?.itemType || 'obat';
-      const masterMult = med?.unit === 'Lusin' ? 12 : (med?.unitMultiplier || 1);
-      const itemMult = item.unit === 'Lusin' ? 12 : (item.unitMultiplier || masterMult);
-      const purchasePrice = item.purchasePrice ?? med?.purchasePrice ?? Math.round(item.price * 0.75);
-
-      const costPerPcs = masterMult > 1 ? purchasePrice / masterMult : purchasePrice;
-      const qtyPcs = item.qty * itemMult;
-      const totalItemCost = Math.round(costPerPcs * qtyPcs);
+      const totalItemCost = transactionItemCost(item, med);
 
       if (itType === 'non_obat') {
         nonObatTotalAmount += item.subtotal;
@@ -998,6 +1143,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setStockHistory(fresh.stockHistory);
     setCashFlows(fresh.cashFlows);
     setSettings(fresh.settings);
+    setMedicineCustomerPrices(fresh.medicineCustomerPrices);
     setCurrentUser(null);
     sessionStorage.removeItem('apotek_active_user');
   };
@@ -1021,6 +1167,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         stockHistory,
         settings,
         cashFlows,
+        medicineCustomerPrices,
 
         addCashFlow,
         deleteCashFlow,
@@ -1029,6 +1176,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateMedicine,
         deleteMedicine,
         restoreMedicine,
+
+        addMedicineCustomerPrice,
+        deleteMedicineCustomerPrice,
+        getCustomerPricesForMedicine,
+        syncCustomerPrices,
 
         addStock,
         adjustStock,

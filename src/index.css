@@ -62,6 +62,50 @@
   background: #94a3b8;
 }
 
+#printable-receipt {
+  /* Keep the preview and print area aligned with the configured zero margins. */
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: var(--receipt-width, 58mm) !important;
+  max-width: var(--receipt-width, 58mm) !important;
+  padding: var(--receipt-margin-top, 0mm) var(--receipt-margin-right, 0mm) var(--receipt-margin-bottom, 0mm) var(--receipt-margin-left, 0mm) !important;
+  font-size: var(--receipt-font-size, 7pt) !important;
+  line-height: var(--receipt-line-height, 1.2) !important;
+}
+
+#printable-receipt .flex.justify-between {
+  display: grid;
+  grid-template-columns: var(--receipt-label-width, 56%) minmax(0, 1fr);
+  column-gap: var(--receipt-column-gap, 2mm);
+  align-items: baseline;
+}
+
+#printable-receipt .receipt-meta {
+  grid-template-columns: 28% minmax(0, 1fr);
+}
+
+#printable-receipt .receipt-meta > span:last-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#printable-receipt .flex.justify-between > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#printable-receipt .flex.justify-between > span:last-child {
+  min-width: 0;
+  white-space: nowrap;
+  text-align: var(--receipt-amount-align, right);
+}
+
+#printable-receipt p,
+#printable-receipt h2,
+#printable-receipt div {
+  overflow-wrap: anywhere;
+}
+
 @media print {
   body * {
     visibility: hidden;
@@ -73,10 +117,12 @@
     position: absolute;
     left: 0;
     top: 0;
-    width: 80mm !important; /* Typical receipt width */
+    width: var(--receipt-width, 58mm) !important;
     max-width: 100% !important;
     margin: 0 !important;
-    padding: 10px !important;
+    padding: var(--receipt-margin-top, 0mm) var(--receipt-margin-right, 0mm) var(--receipt-margin-bottom, 0mm) var(--receipt-margin-left, 0mm) !important;
+    font-size: var(--receipt-font-size, 7pt) !important;
+    line-height: var(--receipt-line-height, 1.2) !important;
     border: none !important;
     box-shadow: none !important;
     background-color: white !important;
@@ -86,6 +132,30 @@
   /* Ensure text colors are black for better thermal printing */
   #printable-receipt * {
     color: black !important;
+  }
+
+  #printable-receipt .flex.justify-between {
+    display: grid !important;
+    grid-template-columns: var(--receipt-label-width, 56%) minmax(0, 1fr) !important;
+    column-gap: var(--receipt-column-gap, 2mm) !important;
+    align-items: baseline !important;
+  }
+
+  #printable-receipt .flex.justify-between > span:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  #printable-receipt .flex.justify-between > span:last-child {
+    min-width: 0;
+    white-space: nowrap;
+    text-align: var(--receipt-amount-align, right);
+  }
+
+  #printable-receipt p,
+  #printable-receipt h2,
+  #printable-receipt div {
+    overflow-wrap: anywhere;
   }
   
   /* Remove backgrounds for print */
